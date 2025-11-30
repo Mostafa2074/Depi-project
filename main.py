@@ -145,9 +145,16 @@ def main():
     train, min_date, max_date, sort_state, prophet_df = load_data()
     
     # Load production model from MLflow Registry
-    model = load_production_model_from_registry()
-    model_type = get_model_type_from_registry() if model else "unknown"
-    st.session_state.model_type = model_type
+    model = None
+    model_type = "unknown"
+    
+    try:
+        model = load_production_model_from_registry()
+        if model:
+            model_type = get_model_type_from_registry() if model else "unknown"
+        st.session_state.model_type = model_type
+    except Exception as e:
+        st.warning(f"Could not load model from registry: {e}")
 
     # Sidebar Navigation
     st.sidebar.title("🧭 Navigation")
