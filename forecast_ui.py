@@ -55,10 +55,10 @@ def run_forecast_app(model, prophet_df, model_type="unknown"):
     st.markdown("---")
 
     # ========================================================================
-    # MODE 1: BATCH PREDICTIONS (UPDATED WITH DATE INPUT)
+    # MODE 1: BATCH PREDICTIONS
     # ========================================================================
     if prediction_mode == "📦 Batch Predictions":
-        st.sidebar.header("Batch Forecast Settings")
+        st.subheader("📦 Batch Forecast Settings")
         
         # Get prediction end date with default value 2017/9/15
         default_end_date = date(2017, 9, 15)
@@ -67,17 +67,17 @@ def run_forecast_app(model, prophet_df, model_type="unknown"):
         if not prophet_df.empty:
             last_data_date = prophet_df['ds'].max().date()
             default_periods = (default_end_date - last_data_date).days
-            st.sidebar.info(f"Last data date: {last_data_date}")
-            st.sidebar.info(f"Default forecast days: {default_periods}")
+            st.info(f"📅 Last data date: {last_data_date}")
+            st.info(f"📊 Default forecast days: {default_periods}")
         
-        forecast_end_date = st.sidebar.date_input(
+        forecast_end_date = st.date_input(
             "Forecast End Date:",
             value=default_end_date,
             min_value=date.today() if prophet_df.empty else prophet_df['ds'].max().date() + timedelta(days=1),
             max_value=date(2030, 1, 1)
         )
 
-        if st.sidebar.button("🚀 Run Batch Forecast"):
+        if st.button("🚀 Run Batch Forecast", type="primary"):
             with st.spinner(f'Generating forecast until {forecast_end_date}...'):
                 try:
                     # Generate forecast using MLflow model
@@ -102,6 +102,15 @@ def run_forecast_app(model, prophet_df, model_type="unknown"):
                             st.session_state.forecast_periods = actual_periods
 
                             st.success(f"✅ Forecast generated for {actual_periods} days until {forecast_end_date}")
+                            
+                            # Display results immediately
+                            display_mlflow_forecast_results(
+                                standardized_forecast,
+                                prophet_df,
+                                model_type,
+                                forecast_end_date,
+                                actual_periods
+                            )
                                 
                         else:
                             st.error("Failed to standardize forecast data")
@@ -110,9 +119,11 @@ def run_forecast_app(model, prophet_df, model_type="unknown"):
                         
                 except Exception as e:
                     st.error(f"Error generating forecast: {e}")
+                    import traceback
+                    st.error(f"Detailed error: {traceback.format_exc()}")
 
-        # DISPLAY RESULTS
-        if st.session_state.get('forecast_data') is not None:
+        # Also display results if they exist in session state
+        elif st.session_state.get('forecast_data') is not None:
             display_mlflow_forecast_results(
                 st.session_state.forecast_data,
                 prophet_df,
@@ -125,57 +136,72 @@ def run_forecast_app(model, prophet_df, model_type="unknown"):
     # MODE 2: REAL-TIME PREDICTIONS
     # ========================================================================
     elif prediction_mode == "⚡ Real-Time Predictions":
+        st.subheader("⚡ Real-Time Prediction")
+        
         col1, col2 = st.columns([2, 1])
         with col1:
             target_date = st.date_input("Target Date", value=datetime.now().date() + timedelta(days=1))
         with col2:
             st.markdown("###")
-            if st.button("Predict"):
-                # Pass prophet_df to real_time_predict_mlflow for ARIMA context
-                res = real_time_predict_mlflow(model, model_type, pd.to_datetime(target_date), prophet_df=prophet_df)
-                if 'real_time_predictions' not in st.session_state:
-                    st.session_state.real_time_predictions = []
-                st.session_state.real_time_predictions.insert(0, res)
+            if st.button("🔮 Predict", type="primary"):
+                with st.spinner('Generating prediction...'):
+                    # Pass prophet_df to real_time_predict_mlflow for context
+                    res = real_time_predict_mlflow(model, model_type, pd.to_datetime(target_date), prophet_df=prophet_df)
+                    if 'real_time_predictions' not in st.session_state:
+                        st.session_state.real_time_predictions = []
+                    st.session_state.real_time_predictions.insert(0, res)
         
         if st.session_state.get('real_time_predictions'):
             latest = st.session_state.real_time_predictions[0]
             
             if 'error' not in latest:
                 # Metric Cards
+                st.success("✅ Prediction generated successfully!")
                 m1, m2 = st.columns(2)
-                m1.metric("Predicted Sales", f"{latest['prediction']:,.0f}")
+                m1.metric("Predicted Sales", f"${latest['prediction']:,.0f}")
                 m2.metric("Model Type", latest['model_type'])
                 
                 # Visualization
                 if not prophet_df.empty:
                     fig_rt = go.Figure()
-                    # History
+                    
+                    # Historical data (last 30 days for context)
+                    recent_history = prophet_df.tail(30)
                     fig_rt.add_trace(go.Scatter(
-                        x=prophet_df['ds'], y=prophet_df['y'], 
-                        mode='markers', name='Historical', 
-                        marker=dict(color='blue', size=4)
+                        x=recent_history['ds'], 
+                        y=recent_history['y'], 
+                        mode='lines+markers', 
+                        name='Historical Sales', 
+                        line=dict(color='blue', width=2),
+                        marker=dict(size=4)
                     ))
-                    # Prediction
+                    
+                    # Prediction point
                     fig_rt.add_trace(go.Scatter(
-                        x=[pd.to_datetime(latest['date'])], y=[latest['prediction']], 
-                        mode='markers', name='Prediction', 
+                        x=[pd.to_datetime(latest['date'])], 
+                        y=[latest['prediction']], 
+                        mode='markers', 
+                        name='Prediction', 
                         marker=dict(color='red', size=14, symbol='star')
                     ))
                     
                     fig_rt.update_layout(
                         title=f"Real-time Prediction using {model_type}",
                         xaxis_title="Date",
-                        yaxis_title="Sales"
+                        yaxis_title="Sales",
+                        height=500
                     )
                     st.plotly_chart(fig_rt, use_container_width=True)
                 
-                with st.expander("JSON Response"):
+                with st.expander("📋 Prediction Details"):
                     st.json(latest)
             else:
-                st.error(f"Prediction error: {latest.get('error', 'Unknown error')}")
+                st.error(f"❌ Prediction error: {latest.get('error', 'Unknown error')}")
 
 def display_mlflow_forecast_results(forecast_data, prophet_df, model_type, end_date=None, periods=None):
     """Display forecast results for MLflow models."""
+    
+    st.subheader("📊 Forecast Results")
     
     # Ensure we have standardized data
     standardized_data = standardize_forecast_data(forecast_data, model_type)
@@ -184,80 +210,117 @@ def display_mlflow_forecast_results(forecast_data, prophet_df, model_type, end_d
         st.error("No valid forecast data to display.")
         return
     
-    # 1. Header with forecast info
-    if end_date and periods:
-        st.subheader(f"Future Forecast Data (Until {end_date}, {periods} days)")
-    else:
-        st.subheader("Future Forecast Data")
+    # 1. Forecast Summary
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("Forecast Periods", f"{len(standardized_data)} days")
+    with col2:
+        avg_prediction = standardized_data['prediction'].mean()
+        st.metric("Average Prediction", f"${avg_prediction:,.0f}")
+    with col3:
+        total_prediction = standardized_data['prediction'].sum()
+        st.metric("Total Predicted Sales", f"${total_prediction:,.0f}")
     
-    # Clean formatting for display
-    display_df = standardized_data.copy()
-    display_df = display_df.set_index('date')
-    display_df.columns = ['Forecast']
-    st.dataframe(display_df.style.format("{:,.0f}"), use_container_width=True)
+    # 2. Data Table
+    with st.expander("📋 Forecast Data Table", expanded=True):
+        display_df = standardized_data.copy()
+        display_df['date'] = display_df['date'].dt.strftime('%Y-%m-%d')
+        display_df['prediction'] = display_df['prediction'].round(2)
+        display_df = display_df.rename(columns={'date': 'Date', 'prediction': 'Predicted Sales'})
+        st.dataframe(display_df, use_container_width=True, height=300)
 
-    # 2. Chart
-    st.subheader("Forecast Visualization")
+    # 3. Interactive Chart
+    st.subheader("📈 Forecast Visualization")
+    
     fig = go.Figure()
 
     # Actual Data (if available)
     if not prophet_df.empty:
+        # Show last 90 days of historical data for context
+        recent_history = prophet_df.tail(90)
         fig.add_trace(go.Scatter(
-            x=prophet_df['ds'], 
-            y=prophet_df['y'],
+            x=recent_history['ds'], 
+            y=recent_history['y'],
             mode='lines+markers',
             name='Historical Sales',
-            line=dict(color='#1abc9c', width=2),  # Same color as forecast
-            marker=dict(color='#1abc9c', size=4),
-            opacity=0.4  # Slight fade to distinguish history
+            line=dict(color='#1f77b4', width=3),
+            marker=dict(size=4, color='#1f77b4'),
+            opacity=0.8
         ))
 
     # Forecast Line
-    fig.add_trace(go.Scatter(
-        x=standardized_data['date'], y=standardized_data['prediction'],
-        mode='lines+markers', name=f'{model_type} Forecast',
-        line=dict(color='#1abc9c', width=2),
-        marker=dict(size=4)
-    ))
+    if not standardized_data.empty:
+        fig.add_trace(go.Scatter(
+            x=standardized_data['date'], 
+            y=standardized_data['prediction'],
+            mode='lines+markers',
+            name=f'{model_type} Forecast',
+            line=dict(color='#ff7f0e', width=3, dash='dash'),
+            marker=dict(size=5, color='#ff7f0e')
+        ))
 
     # Add vertical line separating history and forecast
-    if not prophet_df.empty:
-        last_historical_date_dt = pd.to_datetime(prophet_df['ds'].max())
+    if not prophet_df.empty and not standardized_data.empty:
+        last_historical_date = prophet_df['ds'].max()
+        first_forecast_date = standardized_data['date'].min()
 
         fig.add_shape(
             type="line",
-            x0=last_historical_date_dt,
-            x1=last_historical_date_dt,
+            x0=last_historical_date,
+            x1=last_historical_date,
             y0=0,
             y1=1,
             xref="x",
             yref="paper",
-            line=dict(color="red", width=2, dash="dash")
+            line=dict(color="red", width=3, dash="dot")
         )
 
         fig.add_annotation(
-            x=last_historical_date_dt,
-            y=1,
+            x=last_historical_date,
+            y=0.95,
             xref="x",
             yref="paper",
             text="Forecast Start",
-            showarrow=False,
-            yshift=10
+            showarrow=True,
+            arrowhead=2,
+            bgcolor="red",
+            font=dict(color="white")
         )
 
     fig.update_layout(
-        title=f"Sales Forecast using {model_type}",
+        title=f"Sales Forecast using {model_type} Model",
         xaxis_title="Date",
-        yaxis_title="Sales"
+        yaxis_title="Sales Amount ($)",
+        height=600,
+        showlegend=True,
+        hovermode='x unified'
     )
     
     st.plotly_chart(fig, use_container_width=True)
 
-    # 3. Download option
-    csv = standardized_data.to_csv(index=False)
-    st.download_button(
-        label="📥 Download Forecast as CSV",
-        data=csv,
-        file_name=f"forecast_{model_type}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
-        mime="text/csv",
-    )
+    # 4. Download option
+    st.subheader("📥 Download Forecast")
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        # Formatted CSV
+        download_df = standardized_data.copy()
+        download_df['date'] = download_df['date'].dt.strftime('%Y-%m-%d')
+        csv_formatted = download_df.to_csv(index=False)
+        st.download_button(
+            label="📥 Download as CSV",
+            data=csv_formatted,
+            file_name=f"forecast_{model_type}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+            mime="text/csv",
+            type="primary"
+        )
+    
+    with col2:
+        # Raw data
+        csv_raw = standardized_data.to_csv(index=False)
+        st.download_button(
+            label="📥 Download Raw Data",
+            data=csv_raw,
+            file_name=f"raw_forecast_{model_type}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+            mime="text/csv"
+        )
