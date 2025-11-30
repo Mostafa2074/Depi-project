@@ -40,33 +40,31 @@ def run_monitoring_app():
     st.title("📊 Prediction Monitoring Dashboard")
     
     # Email configuration section
-    if EMAIL_ALERTS_AVAILABLE:
-        # In monitoring.py - replace the email configuration section
-with st.expander("📧 Email Alert Configuration", expanded=True):
-    # Check if email secrets are configured
-    try:
-        if st.secrets.get("EMAIL"):
-            st.success("✅ Email configuration found in secrets!")
-            
-            email_enabled = st.checkbox("Enable Email Alerts", value=True, key="email_enable")
-            recipient_email = st.text_input(
-                "Recipient Email", 
-                value=st.secrets.get("EMAIL", {}).get("RECIPIENT", "mostafanad2004@gmail.com"),
-                key="email_recipient"
-            )
-            
-            # Test connection button
-            if st.button("Test Email Connection", type="secondary"):
-                test_email_connection(recipient_email)
-        else:
-            st.error("❌ Email secrets not configured in .streamlit/secrets.toml")
+    with st.expander("📧 Email Alert Configuration", expanded=True):
+        # Check if email secrets are configured
+        try:
+            if st.secrets.get("EMAIL"):
+                st.success("✅ Email configuration found in secrets!")
+                
+                email_enabled = st.checkbox("Enable Email Alerts", value=True, key="email_enable")
+                recipient_email = st.text_input(
+                    "Recipient Email", 
+                    value=st.secrets.get("EMAIL", {}).get("RECIPIENT", "mostafanad2004@gmail.com"),
+                    key="email_recipient"
+                )
+                
+                # Test connection button
+                if st.button("Test Email Connection", type="secondary"):
+                    test_email_connection(recipient_email)
+            else:
+                st.error("❌ Email secrets not configured in .streamlit/secrets.toml")
+                email_enabled = False
+                recipient_email = ""
+                
+        except Exception as e:
+            st.error(f"❌ Error loading email configuration: {e}")
             email_enabled = False
             recipient_email = ""
-            
-    except Exception as e:
-        st.error(f"❌ Error loading email configuration: {e}")
-        email_enabled = False
-        recipient_email = ""
     
     # Load actual dataset first
     try:
@@ -147,6 +145,10 @@ with st.expander("📧 Email Alert Configuration", expanded=True):
 def test_email_connection(recipient_email):
     """Test email connection and send a test message"""
     try:
+        if not EMAIL_ALERTS_AVAILABLE:
+            st.error("Email alert system not available")
+            return
+            
         # Check if email credentials are available in secrets
         if not st.secrets.get("EMAIL"):
             st.error("Email configuration not found in secrets. Please configure EMAIL section in .streamlit/secrets.toml")
@@ -181,11 +183,18 @@ def test_email_connection(recipient_email):
         st.info("Please check your .streamlit/secrets.toml file with SENDER_EMAIL and SENDER_PASSWORD")
 
 def send_high_error_alert(recipient_email, error_data, comparison_stats):
-    """Send email alert for high prediction error"""
+    """Send email alert for high prediction error with rate limiting"""
     try:
         if not EMAIL_ALERTS_AVAILABLE:
             return False
             
+        # Rate limiting - 1 hour cooldown between alerts
+        if 'last_email_sent' in st.session_state:
+            time_since_last = time.time() - st.session_state.last_email_sent
+            if time_since_last < 3600:  # 1 hour cooldown
+                st.warning(f"⏳ Email alerts on cooldown. Next available in {int((3600 - time_since_last)/60)} minutes")
+                return False
+        
         email_alert = EmailAlert.get_instance()
         email_content = EmailContent()
         email_content.recipient = recipient_email
@@ -215,6 +224,9 @@ def send_high_error_alert(recipient_email, error_data, comparison_stats):
         
         # Send alert email
         email_alert.send_email(email_content)
+        
+        # Update last sent time
+        st.session_state.last_email_sent = time.time()
         return True
         
     except Exception as e:
@@ -1017,4 +1029,3 @@ def display_comparison_analysis(comparison_df, pred_df, email_enabled=False, rec
                 file_name=f"raw_monitoring_data_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
                 mime="text/csv",
             )
-
