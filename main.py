@@ -2,6 +2,7 @@
 import streamlit as st
 import os
 import sys
+import pandas as pd
 
 # Set the working directory to the project root
 project_root = os.path.dirname(os.path.abspath(__file__))
@@ -94,9 +95,14 @@ def main():
         st.error(f"Error loading dashboard data: {e}")
         train, min_date, max_date, sort_state, prophet_df = pd.DataFrame(), None, None, pd.Series(), pd.DataFrame()
     
-    # Load production model from MLflow Registry
-    model = load_production_model_from_registry()
-    model_type = get_model_type_from_registry() if model else "unknown"
+    # Load production model from MLflow Registry with better error handling
+    try:
+        model = load_production_model_from_registry()
+        model_type = get_model_type_from_registry() if model else "unknown"
+    except Exception as e:
+        st.sidebar.warning("No trained models found. Please train models first.")
+        model = None
+        model_type = "unknown"
 
     # Sidebar Navigation
     st.sidebar.title("🧭 Navigation")
@@ -116,10 +122,10 @@ def main():
     if "MLflow Tracking" in app_mode:
         setup_mlflow_utilities()
 
-    # Main application routing
+    # Main application routing - FIXED THE TYPO HERE
     if "Dashboard" in app_mode:
         run_dashboard(train, min_date, max_date, sort_state)
-    elif "Forecast Engine" in appmode:
+    elif "Forecast Engine" in app_mode:  # FIXED: appmode -> app_mode
         run_forecast_app(model, prophet_df, model_type)
     elif "Monitoring" in app_mode:
         run_monitoring_app()
