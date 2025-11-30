@@ -1,24 +1,32 @@
-# [file name]: main.py
 import streamlit as st
 import os
 import sys
 
-# Set the working directory to the project root
-project_root = os.path.dirname(os.path.abspath(__file__))
-os.chdir(project_root)
+# Add current directory to path for imports
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
-# Configure MLflow to use relative paths before importing MLflow
-os.environ['MLFLOW_ARTIFACT_ROOT'] = 'file:./mlruns'
+# Configure MLflow to use relative paths before importing MLFlow
+os.makedirs('mlruns', exist_ok=True)
 os.environ['MLFLOW_TRACKING_URI'] = 'sqlite:///mlflow.db'
+os.environ['MLFLOW_ARTIFACT_ROOT'] = 'file:./mlruns'
 
 # Now import other modules
-from data_loader import load_data
-from model_registry import load_production_model_from_registry, get_model_type_from_registry
-from dashboard import run_dashboard
-from forecast_ui import run_forecast_app
-from training import setup_mlflow_training, reset_mlflow_completely
-from monitoring import run_monitoring_app
-from model_registry import fix_mlflow_paths, recreate_model_registry as recreate_registry
+try:
+    from data_loader import load_data
+    from model_registry import load_production_model_from_registry, get_model_type_from_registry
+    from dashboard import run_dashboard
+    from forecast_ui import run_forecast_app
+    from training import setup_mlflow_training, reset_mlflow_completely
+    from monitoring import run_monitoring_app
+    from model_registry import fix_mlflow_paths, recreate_model_registry as recreate_registry
+except ImportError as e:
+    st.error(f"Import error: {e}")
+    st.stop()
+
+# MLflow Setup - Import after environment variables are set
+import mlflow
+from mlflow.tracking import MlflowClient
+mlflow.set_tracking_uri("sqlite:///mlflow.db")
 
 # ============================================================================
 # PAGE CONFIGURATION
@@ -28,11 +36,6 @@ st.set_page_config(
     page_title="Data Analysis & Forecast App", 
     page_icon="📊"
 )
-
-# MLflow Setup - Import after environment variables are set
-import mlflow
-from mlflow.tracking import MlflowClient
-mlflow.set_tracking_uri("sqlite:///mlflow.db")
 
 # ============================================================================
 # SESSION MANAGEMENT
