@@ -15,13 +15,13 @@ def load_data():
         
         # Check if Data.zip exists
         if os.path.exists(data_zip_path):
-            st.success(f"Found Data.zip at {data_zip_path}")
+            # st.success(f"Found Data.zip at {data_zip_path}")
             
             # Extract and load data from zip
             with zipfile.ZipFile(data_zip_path, 'r') as zip_ref:
                 # List files in the zip
                 file_list = zip_ref.namelist()
-                st.info(f"Files in zip: {file_list}")
+                # st.info(f"Files in zip: {file_list}")
                 
                 # Look for Data.csv for dashboard
                 data_file = None
@@ -39,7 +39,7 @@ def load_data():
                     if 'date' in train.columns:
                         train['date'] = pd.to_datetime(train['date'])
                     
-                    st.success(f"✅ Successfully loaded dashboard data from {data_file} in Data.zip")
+                    # st.success(f"✅ Successfully loaded dashboard data from {data_file} in Data.zip")
                     
                 else:
                     st.error("No Data.csv file found in Data.zip")
@@ -105,3 +105,4 @@ def load_data():
         st.error(f"Detailed error: {traceback.format_exc()}")
         # Return empty dataframes to prevent crashes
         return pd.DataFrame(), None, None, pd.Series(), pd.DataFrame()
+
