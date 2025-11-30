@@ -1,7 +1,7 @@
+# [file name]: forecast_ui.py
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
-import zipfile  # Add this import
 from datetime import date, datetime, timedelta
 from predictions import batch_predict_mlflow, real_time_predict_mlflow, standardize_forecast_data
 
@@ -210,9 +210,6 @@ def display_mlflow_forecast_results(forecast_data, prophet_df, model_type, end_d
         st.error("No valid forecast data to display.")
         return
     
-    # Load historical data from Data.csv inside Data.zip
-    historical_data = load_historical_data()
-    
     # 1. Forecast Summary
     col1, col2, col3 = st.columns(3)
     with col1:
@@ -232,38 +229,39 @@ def display_mlflow_forecast_results(forecast_data, prophet_df, model_type, end_d
         display_df = display_df.rename(columns={'date': 'Date', 'prediction': 'Predicted Sales'})
         st.dataframe(display_df, use_container_width=True, height=300)
 
-    # 3. Interactive Chart - Using historical data from Data.csv
+    # 3. Interactive Chart (UPDATED with improvements from forecast_ui.py)
     st.subheader("📈 Forecast Visualization")
     
     fig = go.Figure()
 
-    # Actual Historical Data from Data.csv
-    if not historical_data.empty:
+    # Actual Data (if available)
+    if not prophet_df.empty:
+        # Show last 90 days of historical data for context
+        recent_history = prophet_df.tail(90)
         fig.add_trace(go.Scatter(
-            x=historical_data['ds'], 
-            y=historical_data['y'],
+            x=recent_history['ds'], 
+            y=recent_history['y'],
             mode='lines+markers',
-            name='Historical Sales (Data.csv)',
-            line=dict(color='#1f77b4', width=3),
-            marker=dict(size=4, color='#1f77b4'),
-            opacity=0.8
+            name='Historical Sales',
+            line=dict(color='#1abc9c', width=2),  # Color from forecast_ui.py
+            marker=dict(size=4, color='#1abc9c'),
+            opacity=0.4  # Fade effect from forecast_ui.py to distinguish history
         ))
 
-    # Forecast Data (new predictions)
+    # Forecast Line
     if not standardized_data.empty:
         fig.add_trace(go.Scatter(
             x=standardized_data['date'], 
             y=standardized_data['prediction'],
             mode='lines+markers',
             name=f'{model_type} Forecast',
-            line=dict(color='#ff7f0e', width=3, dash='dash'),
-            marker=dict(size=5, color='#ff7f0e')
+            line=dict(color='#1abc9c', width=2),  # Consistent color from forecast_ui.py
+            marker=dict(size=4)
         ))
 
-    # Add vertical line separating history and forecast
-    if not historical_data.empty and not standardized_data.empty:
-        last_historical_date = historical_data['ds'].max()
-        first_forecast_date = standardized_data['date'].min()
+    # Add vertical line separating history and forecast (UPDATED style)
+    if not prophet_df.empty and not standardized_data.empty:
+        last_historical_date = prophet_df['ds'].max()
 
         fig.add_shape(
             type="line",
@@ -273,19 +271,17 @@ def display_mlflow_forecast_results(forecast_data, prophet_df, model_type, end_d
             y1=1,
             xref="x",
             yref="paper",
-            line=dict(color="red", width=3, dash="dot")
+            line=dict(color="red", width=2, dash="dash")  # Simpler style from forecast_ui.py
         )
 
         fig.add_annotation(
             x=last_historical_date,
-            y=0.95,
+            y=1,
             xref="x",
             yref="paper",
             text="Forecast Start",
-            showarrow=True,
-            arrowhead=2,
-            bgcolor="red",
-            font=dict(color="white")
+            showarrow=False,
+            yshift=10  # Cleaner annotation from forecast_ui.py
         )
 
     fig.update_layout(
@@ -299,34 +295,7 @@ def display_mlflow_forecast_results(forecast_data, prophet_df, model_type, end_d
     
     st.plotly_chart(fig, use_container_width=True)
 
-    # 4. Combined Data View - Using historical data from Data.csv
-    if not historical_data.empty and not standardized_data.empty:
-        with st.expander("🔍 Combined Historical + Forecast Data"):
-            # Combine historical and forecast data
-            historical_display = historical_data[['ds', 'y']].copy()
-            historical_display = historical_display.rename(columns={'ds': 'Date', 'y': 'Sales'})
-            historical_display['Type'] = 'Historical'
-            
-            forecast_display = standardized_data.copy()
-            forecast_display = forecast_display.rename(columns={'date': 'Date', 'prediction': 'Sales'})
-            forecast_display['Type'] = 'Forecast'
-            
-            combined_df = pd.concat([historical_display, forecast_display], ignore_index=True)
-            combined_df['Date'] = pd.to_datetime(combined_df['Date'])
-            combined_df = combined_df.sort_values('Date')
-            
-            st.dataframe(combined_df, use_container_width=True, height=400)
-            
-            # Download combined data
-            csv_combined = combined_df.to_csv(index=False)
-            st.download_button(
-                label="📥 Download Combined Historical + Forecast Data",
-                data=csv_combined,
-                file_name=f"combined_historical_forecast_{model_type}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
-                mime="text/csv"
-            )
-
-    # 5. Download option
+    # 4. Download option
     st.subheader("📥 Download Forecast")
     col1, col2 = st.columns(2)
     
@@ -352,36 +321,3 @@ def display_mlflow_forecast_results(forecast_data, prophet_df, model_type, end_d
             file_name=f"raw_forecast_{model_type}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
             mime="text/csv"
         )
-
-
-def load_historical_data():
-    """Load historical data from Data.csv inside Data.zip"""
-    try:
-        # Read the zip file and extract Data.csv
-        with zipfile.ZipFile('Data.zip', 'r') as zip_ref:
-            with zip_ref.open('Data.csv') as file:
-                historical_df = pd.read_csv(file)
-        
-        # Convert to the expected format (assuming columns are 'ds' and 'y')
-        if 'Date' in historical_df.columns and 'Sales' in historical_df.columns:
-            historical_df = historical_df.rename(columns={'Date': 'ds', 'Sales': 'y'})
-        
-        # Convert date column to datetime
-        historical_df['ds'] = pd.to_datetime(historical_df['ds'])
-        
-        # Sort by date
-        historical_df = historical_df.sort_values('ds')
-        
-        st.sidebar.info(f"📊 Loaded {len(historical_df)} historical records from Data.csv")
-        return historical_df
-        
-    except FileNotFoundError:
-        st.sidebar.warning("❌ Data.zip not found. Using provided prophet_df instead.")
-        return pd.DataFrame()  # Return empty DataFrame if file not found
-    except KeyError:
-        st.sidebar.warning("❌ Data.csv not found in Data.zip. Using provided prophet_df instead.")
-        return pd.DataFrame()  # Return empty DataFrame if file not found
-    except Exception as e:
-        st.sidebar.warning(f"❌ Error loading historical data: {e}. Using provided prophet_df instead.")
-        return pd.DataFrame()
-
