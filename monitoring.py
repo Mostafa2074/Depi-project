@@ -170,11 +170,17 @@ def test_email_connection(recipient_email):
         st.error(f"❌ Failed to send test email: {e}")
         st.info("Please check your .streamlit/secrets.toml file with SENDER_EMAIL and SENDER_PASSWORD")
 
+# In monitoring.py, update the send_high_error_alert function:
+
 def send_high_error_alert(recipient_email, error_data, comparison_stats):
     """Send email alert for high prediction error"""
     try:
         if not EMAIL_ALERTS_AVAILABLE:
-            st.warning("Email alerts not available - EMAIL_ALERTS_AVAILABLE is False")
+            print("Email alerts not available - EMAIL_ALERTS_AVAILABLE is False")
+            return False
+            
+        if EmailAlert is None:
+            print("EmailAlert is None - cannot send email")
             return False
             
         email_alert = EmailAlert.get_instance()
@@ -204,16 +210,25 @@ def send_high_error_alert(recipient_email, error_data, comparison_stats):
         email_content.message_body = alert_body
         email_content.prepare_html()
         
-        # Send alert email
-        success = email_alert.send_email(email_content)
-        if success:
-            print("✅ Email sent successfully!")
-        return success
+        # Send alert email with better error handling
+        try:
+            success = email_alert.send_email(email_content)
+            if success:
+                print("✅ Email sent successfully!")
+            return success
+        except Exception as email_error:
+            if "Daily user sending limit exceeded" in str(email_error):
+                print("⚠️ Gmail daily limit reached - email not sent")
+                return False
+            elif "Authentication failed" in str(email_error):
+                print("❌ Email authentication failed")
+                return False
+            else:
+                print(f"❌ Email sending failed: {email_error}")
+                return False
         
     except Exception as e:
-        st.error(f"Failed to send email alert: {e}")
-        import traceback
-        st.error(f"Detailed error: {traceback.format_exc()}")
+        print(f"Failed to send email alert: {e}")
         return False
         
 def get_latest_prediction_from_mlflow():
@@ -1039,4 +1054,5 @@ def test_email_system():
         import traceback
         st.code(traceback.format_exc())
         return False
+
 
