@@ -143,16 +143,17 @@ def main():
         setup_mlflow_training()
 
     # Footer
-    st.sidebar.markdown("---")
-    st.sidebar.info(
-        "**MLflow Status:**\n"
-        f"- Tracking URI: `{mlflow.get_tracking_uri()}`\n"
-        f"- Artifact Root: `{os.environ.get('MLFLOW_ARTIFACT_ROOT', 'Not set')}`\n"
-        f"- Production Model: `{model_type if model else 'None'}`"
-    )
+    # st.sidebar.markdown("---")
+    # st.sidebar.info(
+        # "**MLflow Status:**\n"
+        # f"- Tracking URI: `{mlflow.get_tracking_uri()}`\n"
+        # f"- Artifact Root: `{os.environ.get('MLFLOW_ARTIFACT_ROOT', 'Not set')}`\n"
+        # f"- Production Model: `{model_type if model else 'None'}`"
+    # )
 
 if __name__ == '__main__':
     main()
+
 
 
 
