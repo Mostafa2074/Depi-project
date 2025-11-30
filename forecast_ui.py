@@ -229,39 +229,38 @@ def display_mlflow_forecast_results(forecast_data, prophet_df, model_type, end_d
         display_df = display_df.rename(columns={'date': 'Date', 'prediction': 'Predicted Sales'})
         st.dataframe(display_df, use_container_width=True, height=300)
 
-    # 3. Interactive Chart (UPDATED with improvements from forecast_ui.py)
+    # 3. Interactive Chart - FIXED to show both historical AND forecast data
     st.subheader("📈 Forecast Visualization")
     
     fig = go.Figure()
 
-    # Actual Data (if available)
+    # Actual Historical Data (if available)
     if not prophet_df.empty:
-        # Show last 90 days of historical data for context
-        recent_history = prophet_df.tail(90)
         fig.add_trace(go.Scatter(
-            x=recent_history['ds'], 
-            y=recent_history['y'],
+            x=prophet_df['ds'], 
+            y=prophet_df['y'],
             mode='lines+markers',
             name='Historical Sales',
-            line=dict(color='#1abc9c', width=2),  # Color from forecast_ui.py
-            marker=dict(size=4, color='#1abc9c'),
-            opacity=0.4  # Fade effect from forecast_ui.py to distinguish history
+            line=dict(color='#1f77b4', width=3),
+            marker=dict(size=4, color='#1f77b4'),
+            opacity=0.8
         ))
 
-    # Forecast Line
+    # Forecast Data (new predictions)
     if not standardized_data.empty:
         fig.add_trace(go.Scatter(
             x=standardized_data['date'], 
             y=standardized_data['prediction'],
             mode='lines+markers',
             name=f'{model_type} Forecast',
-            line=dict(color='#1abc9c', width=2),  # Consistent color from forecast_ui.py
-            marker=dict(size=4)
+            line=dict(color='#ff7f0e', width=3, dash='dash'),
+            marker=dict(size=5, color='#ff7f0e')
         ))
 
-    # Add vertical line separating history and forecast (UPDATED style)
+    # Add vertical line separating history and forecast
     if not prophet_df.empty and not standardized_data.empty:
         last_historical_date = prophet_df['ds'].max()
+        first_forecast_date = standardized_data['date'].min()
 
         fig.add_shape(
             type="line",
@@ -271,17 +270,19 @@ def display_mlflow_forecast_results(forecast_data, prophet_df, model_type, end_d
             y1=1,
             xref="x",
             yref="paper",
-            line=dict(color="red", width=2, dash="dash")  # Simpler style from forecast_ui.py
+            line=dict(color="red", width=3, dash="dot")
         )
 
         fig.add_annotation(
             x=last_historical_date,
-            y=1,
+            y=0.95,
             xref="x",
             yref="paper",
             text="Forecast Start",
-            showarrow=False,
-            yshift=10  # Cleaner annotation from forecast_ui.py
+            showarrow=True,
+            arrowhead=2,
+            bgcolor="red",
+            font=dict(color="white")
         )
 
     fig.update_layout(
@@ -295,7 +296,34 @@ def display_mlflow_forecast_results(forecast_data, prophet_df, model_type, end_d
     
     st.plotly_chart(fig, use_container_width=True)
 
-    # 4. Download option
+    # 4. Combined Data View (NEW - Show both historical and forecast together)
+    if not prophet_df.empty and not standardized_data.empty:
+        with st.expander("🔍 Combined Historical + Forecast Data"):
+            # Combine historical and forecast data
+            historical_display = prophet_df[['ds', 'y']].copy()
+            historical_display = historical_display.rename(columns={'ds': 'Date', 'y': 'Sales'})
+            historical_display['Type'] = 'Historical'
+            
+            forecast_display = standardized_data.copy()
+            forecast_display = forecast_display.rename(columns={'date': 'Date', 'prediction': 'Sales'})
+            forecast_display['Type'] = 'Forecast'
+            
+            combined_df = pd.concat([historical_display, forecast_display], ignore_index=True)
+            combined_df['Date'] = pd.to_datetime(combined_df['Date'])
+            combined_df = combined_df.sort_values('Date')
+            
+            st.dataframe(combined_df, use_container_width=True, height=400)
+            
+            # Download combined data
+            csv_combined = combined_df.to_csv(index=False)
+            st.download_button(
+                label="📥 Download Combined Historical + Forecast Data",
+                data=csv_combined,
+                file_name=f"combined_historical_forecast_{model_type}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                mime="text/csv"
+            )
+
+    # 5. Download option
     st.subheader("📥 Download Forecast")
     col1, col2 = st.columns(2)
     
