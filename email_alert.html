@@ -1,65 +1,87 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Email Alert</title>
+    <style>
+      body {
+        margin: 0;
+        padding: 0;
+        background: #c9c9c9;
+        font-family: "Arial", sans-serif;
+      }
+      .alert-box {        
+        background: #0e1118;
+        max-width: 600px;
+        margin: 0 auto;
+        padding: 20px;
+      }
+      .alert-header {
+        background: #2d2d3571;
+        padding: 5px;
+        border-radius: 5px;
+        color: #ff4b4b;
+        text-align: center;
+      }
+      .alert-body {
+        padding: 25px 20px;
+        color: #c1c1c1;
+      }
 
-<head>
-  <meta charset="utf-8">
-  <style>
-    body {
-      font-family: Arial, sans-serif;
-      line-height: 1.6;
-      color: #333;
-    }
+      .data-table {
+        width: 100%;
+        background: #1e1e1e;
+        border-radius: 5px;
+        margin: 20px 0;
+        color: #1bbb9a;
+        border-collapse: collapse;
+      }
+      .data-table tr:hover {
+        background-color: #17564d;
+        color: #ff4b4b;
+        cursor: pointer;
+        transition: background-color 0.3s ease;
+      }
+      .data-table tr td {
+        padding: 15px;
+      }
+      .data-table tr:not(:last-child) td {
+        border-bottom: 1px solid #2a2a2a;
+      }
+      hr {
+        border: none;
+        border-top: 1px solid #17564d;
+        margin: 20px 0;
+      }
+      .notes {
+        background: #2d2d3571;
+        padding: 15px;
+        border-radius: 5px;
+        color: #b4b4b4d5;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="alert-box">
+      <div class="alert-header">
+        <h2>{{title}}</h2>
+      </div>
+      <div class="alert-body">
+        <p>Hello,</p>
+        <p>{{message}}</p>
+        <hr />
 
-    .container {
-      max-width: 600px;
-      margin: 0 auto;
-      padding: 20px;
-    }
+        <table class="data-table">
+          {{table_rows}}
+        </table>
 
-    .header {
-      background: #f4f4f4;
-      padding: 10px;
-      border-radius: 5px;
-    }
-
-    .content {
-      margin: 20px 0;
-    }
-
-    table {
-      width: 100%;
-      border-collapse: collapse;
-    }
-
-    td {
-      padding: 8px;
-      border-bottom: 1px solid #ddd;
-    }
-
-    .footer {
-      margin-top: 20px;
-      font-size: 0.9em;
-      color: #666;
-    }
-  </style>
-</head>
-
-<body>
-  <div class="container">
-    <div class="header">
-      <h2>{{title}}</h2>
+        <hr />
+        <div>
+          <h3>Notes :</h3>
+          <div class="notes">{{notes}}</div>
+        </div>
+      </div>
     </div>
-    <div class="content">
-      <p>{{message}}</p>
-      <table>
-        {{table_rows}}
-      </table>
-    </div>
-    <div class="footer">
-      <p><strong>Notes:</strong> {{notes}}</p>
-      <p>This is an automated message from the Forecasting Monitoring System.</p>
-    </div>
-  </div>
-</body>
-
+  </body>
 </html>
