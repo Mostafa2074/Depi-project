@@ -68,6 +68,8 @@ def setup_mlflow_utilities():
     
     st.sidebar.markdown("---")
 
+# In main.py, update the data loading section:
+
 def main():
     """Main application entry point"""
     # Initialize Session State
@@ -86,7 +88,7 @@ def main():
     try:
         train, min_date, max_date, sort_state, prophet_df = load_data()
     except Exception as e:
-        st.error(f"Error loading data: {e}")
+        st.error(f"Error loading dashboard data: {e}")
         train, min_date, max_date, sort_state, prophet_df = pd.DataFrame(), None, None, pd.Series(), pd.DataFrame()
     
     # Load production model from MLflow Registry
@@ -100,6 +102,12 @@ def main():
         ["📊 Dashboard", "🚀 Forecast Engine", "📈 Monitoring", "🔬 MLflow Tracking"],
         key="app_mode"
     )
+    
+    # Add data source info to sidebar
+    st.sidebar.markdown("---")
+    st.sidebar.info("**Data Sources:**\n"
+                   "- Dashboard: Data.csv from Data.zip\n"
+                   "- Training: model_dataset.csv")
     
     # Add MLflow utilities to sidebar for MLflow Tracking page
     if "MLflow Tracking" in app_mode:
@@ -123,7 +131,6 @@ def main():
         f"- Artifact Root: `{os.environ.get('MLFLOW_ARTIFACT_ROOT', 'Not set')}`\n"
         f"- Production Model: `{model_type if model else 'None'}`"
     )
-
 # Optional: Add to main.py for initial setup
 def check_data_files():
     """Check if required data files exist"""
@@ -145,4 +152,5 @@ def check_data_files():
 
 if __name__ == '__main__':
     main()
+
 
