@@ -7,43 +7,17 @@ import streamlit as st
 def batch_predict_mlflow(model, model_type, forecast_end_date, prophet_df=None):
     """Generate batch predictions using MLflow model"""
     try:
-        if model_type == "prophet":
-            return _prophet_batch_predict(model, forecast_end_date, prophet_df)
-        elif model_type == "arima":
+        if model_type == "arima":
             return _arima_batch_predict(model, forecast_end_date, prophet_df)
         elif model_type == "lightgbm":
             return _lightgbm_batch_predict(model, forecast_end_date, prophet_df)
         else:
-            st.error(f"Unsupported model type: {model_type}")
-            return pd.DataFrame()
+            # Fallback to LightGBM for unknown model types
+            st.warning(f"Model type '{model_type}' not supported. Using LightGBM fallback.")
+            return _lightgbm_batch_predict(model, forecast_end_date, prophet_df)
     except Exception as e:
         st.error(f"Batch prediction error: {e}")
         return pd.DataFrame()
-
-def _prophet_batch_predict(model, forecast_end_date, prophet_df):
-    """Prophet batch prediction"""
-    if prophet_df is None or prophet_df.empty:
-        st.error("Prophet model requires historical data")
-        return pd.DataFrame()
-    
-    # Calculate periods needed
-    last_date = prophet_df['ds'].max()
-    end_date = pd.to_datetime(forecast_end_date)
-    periods = (end_date - last_date).days
-    
-    if periods <= 0:
-        st.error("Forecast end date must be after last historical date")
-        return pd.DataFrame()
-    
-    # Create future dataframe
-    future = model.make_future_dataframe(periods=periods)
-    forecast = model.predict(future)
-    
-    # Filter only future predictions
-    future_forecast = forecast[forecast['ds'] > last_date][['ds', 'yhat']]
-    future_forecast = future_forecast.rename(columns={'ds': 'date', 'yhat': 'prediction'})
-    
-    return future_forecast
 
 def _arima_batch_predict(model, forecast_end_date, prophet_df):
     """ARIMA batch prediction"""
@@ -108,13 +82,11 @@ def _lightgbm_batch_predict(model, forecast_end_date, prophet_df):
 def real_time_predict_mlflow(model, model_type, target_date, prophet_df=None):
     """Generate real-time prediction for a specific date"""
     try:
-        if model_type == "prophet":
-            future_date_df = pd.DataFrame({'ds': [target_date]})
-            prediction = model.predict(future_date_df)['yhat'].iloc[0]
-        elif model_type == "arima":
+        if model_type == "arima":
             # For ARIMA, we need to specify this is 1 step ahead from last data point
             prediction = model.forecast(steps=1)[0]
-        elif model_type == "lightgbm":
+        else:
+            # Default to LightGBM for all other model types
             # Prepare features for the target date
             features = pd.DataFrame({
                 'year': [target_date.year],
@@ -126,8 +98,6 @@ def real_time_predict_mlflow(model, model_type, target_date, prophet_df=None):
                 'weekofyear': [target_date.isocalendar()[1]]
             })
             prediction = model.predict(features)[0]
-        else:
-            return {'error': f'Unsupported model type: {model_type}'}
         
         return {
             'date': target_date.strftime('%Y-%m-%d'),
