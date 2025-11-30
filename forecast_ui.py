@@ -161,92 +161,45 @@ def run_forecast_app(model, prophet_df, model_type="unknown"):
                 m1.metric("Predicted Sales", f"${latest['prediction']:,.0f}")
                 m2.metric("Model Type", latest['model_type'])
                 
-                # Visualization with historical context
-                display_real_time_prediction_with_history(latest, prophet_df, model_type)
+                # Visualization
+                if not prophet_df.empty:
+                    fig_rt = go.Figure()
+                    
+                    # Historical data (last 30 days for context)
+                    recent_history = prophet_df.tail(30)
+                    fig_rt.add_trace(go.Scatter(
+                        x=recent_history['ds'], 
+                        y=recent_history['y'], 
+                        mode='lines+markers', 
+                        name='Historical Sales', 
+                        line=dict(color='blue', width=2),
+                        marker=dict(size=4)
+                    ))
+                    
+                    # Prediction point
+                    fig_rt.add_trace(go.Scatter(
+                        x=[pd.to_datetime(latest['date'])], 
+                        y=[latest['prediction']], 
+                        mode='markers', 
+                        name='Prediction', 
+                        marker=dict(color='red', size=14, symbol='star')
+                    ))
+                    
+                    fig_rt.update_layout(
+                        title=f"Real-time Prediction using {model_type}",
+                        xaxis_title="Date",
+                        yaxis_title="Sales",
+                        height=500
+                    )
+                    st.plotly_chart(fig_rt, use_container_width=True)
                 
                 with st.expander("📋 Prediction Details"):
                     st.json(latest)
             else:
                 st.error(f"❌ Prediction error: {latest.get('error', 'Unknown error')}")
 
-def display_real_time_prediction_with_history(prediction_result, prophet_df, model_type):
-    """Display real-time prediction with historical context"""
-    if prophet_df.empty:
-        st.warning("No historical data available for context")
-        return
-    
-    # Create a combined dataset for the chart
-    fig = go.Figure()
-    
-    # Get the last 90 days of historical data
-    recent_history = prophet_df.tail(90).copy()
-    
-    # Add historical sales as a continuous line
-    fig.add_trace(go.Scatter(
-        x=recent_history['ds'], 
-        y=recent_history['y'], 
-        mode='lines+markers',
-        name='Historical Sales', 
-        line=dict(color='#2E86AB', width=3),
-        marker=dict(size=5, color='#2E86AB'),
-        hovertemplate='<b>Historical</b><br>Date: %{x}<br>Sales: $%{y:,.0f}<extra></extra>'
-    ))
-    
-    # Add the prediction point
-    pred_date = pd.to_datetime(prediction_result['date'])
-    pred_value = prediction_result['prediction']
-    
-    # Draw a line from the last historical point to the prediction
-    last_historical_point = recent_history.iloc[-1]
-    fig.add_trace(go.Scatter(
-        x=[last_historical_point['ds'], pred_date],
-        y=[last_historical_point['y'], pred_value],
-        mode='lines',
-        name='Prediction Trend',
-        line=dict(color='#A23B72', width=2, dash='dot'),
-        showlegend=False,
-        hovertemplate=False
-    ))
-    
-    # Add the prediction point with emphasis
-    fig.add_trace(go.Scatter(
-        x=[pred_date], 
-        y=[pred_value], 
-        mode='markers+text',
-        name=f'Prediction ({pred_date.strftime("%Y-%m-%d")})', 
-        marker=dict(
-            color='#F18F01', 
-            size=20, 
-            symbol='star',
-            line=dict(width=3, color='white')
-        ),
-        text=[f"${pred_value:,.0f}"],
-        textposition="top center",
-        textfont=dict(size=14, color='#F18F01'),
-        hovertemplate=f'<b>Prediction</b><br>Date: {pred_date.strftime("%Y-%m-%d")}<br>Sales: ${pred_value:,.0f}<extra></extra>'
-    ))
-    
-    # Update layout
-    fig.update_layout(
-        title=f"📊 Real-time Sales Prediction using {model_type}",
-        xaxis_title="Date",
-        yaxis_title="Sales Amount ($)",
-        height=500,
-        showlegend=True,
-        hovermode='x unified',
-        legend=dict(
-            yanchor="top",
-            y=0.99,
-            xanchor="left",
-            x=0.01,
-            bgcolor='rgba(255,255,255,0.8)'
-        )
-    )
-    
-    st.plotly_chart(fig, use_container_width=True)
-
 def display_mlflow_forecast_results(forecast_data, prophet_df, model_type, end_date=None, periods=None):
-    """Display forecast results for MLflow models with proper historical context."""
+    """Display forecast results for MLflow models."""
     
     st.subheader("📊 Forecast Results")
     
@@ -276,11 +229,73 @@ def display_mlflow_forecast_results(forecast_data, prophet_df, model_type, end_d
         display_df = display_df.rename(columns={'date': 'Date', 'prediction': 'Predicted Sales'})
         st.dataframe(display_df, use_container_width=True, height=300)
 
-    # 3. Interactive Chart with Historical Context
-    st.subheader("📈 Historical Sales vs Forecast")
+    # 3. Interactive Chart
+    st.subheader("📈 Forecast Visualization")
     
-    # Create the combined chart
-    fig = create_combined_historical_forecast_chart(prophet_df, standardized_data, model_type)
+    fig = go.Figure()
+
+    # Actual Data (if available)
+    if not prophet_df.empty:
+        # Show last 90 days of historical data for context
+        recent_history = prophet_df.tail(90)
+        fig.add_trace(go.Scatter(
+            x=recent_history['ds'], 
+            y=recent_history['y'],
+            mode='lines+markers',
+            name='Historical Sales',
+            line=dict(color='#1f77b4', width=3),
+            marker=dict(size=4, color='#1f77b4'),
+            opacity=0.8
+        ))
+
+    # Forecast Line
+    if not standardized_data.empty:
+        fig.add_trace(go.Scatter(
+            x=standardized_data['date'], 
+            y=standardized_data['prediction'],
+            mode='lines+markers',
+            name=f'{model_type} Forecast',
+            line=dict(color='#ff7f0e', width=3, dash='dash'),
+            marker=dict(size=5, color='#ff7f0e')
+        ))
+
+    # Add vertical line separating history and forecast
+    if not prophet_df.empty and not standardized_data.empty:
+        last_historical_date = prophet_df['ds'].max()
+        first_forecast_date = standardized_data['date'].min()
+
+        fig.add_shape(
+            type="line",
+            x0=last_historical_date,
+            x1=last_historical_date,
+            y0=0,
+            y1=1,
+            xref="x",
+            yref="paper",
+            line=dict(color="red", width=3, dash="dot")
+        )
+
+        fig.add_annotation(
+            x=last_historical_date,
+            y=0.95,
+            xref="x",
+            yref="paper",
+            text="Forecast Start",
+            showarrow=True,
+            arrowhead=2,
+            bgcolor="red",
+            font=dict(color="white")
+        )
+
+    fig.update_layout(
+        title=f"Sales Forecast using {model_type} Model",
+        xaxis_title="Date",
+        yaxis_title="Sales Amount ($)",
+        height=600,
+        showlegend=True,
+        hovermode='x unified'
+    )
+    
     st.plotly_chart(fig, use_container_width=True)
 
     # 4. Download option
@@ -309,112 +324,3 @@ def display_mlflow_forecast_results(forecast_data, prophet_df, model_type, end_d
             file_name=f"raw_forecast_{model_type}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
             mime="text/csv"
         )
-
-def create_combined_historical_forecast_chart(historical_df, forecast_df, model_type):
-    """Create a comprehensive chart that properly combines historical and forecast data."""
-    
-    fig = go.Figure()
-
-    # HISTORICAL DATA - Show last 180 days for context
-    if not historical_df.empty:
-        recent_history = historical_df.tail(180)
-        
-        # Add historical sales line
-        fig.add_trace(go.Scatter(
-            x=recent_history['ds'], 
-            y=recent_history['y'],
-            mode='lines+markers',
-            name='📊 Historical Sales',
-            line=dict(color='#2E86AB', width=4),
-            marker=dict(size=5, color='#2E86AB'),
-            hovertemplate='<b>Historical</b><br>Date: %{x}<br>Sales: $%{y:,.0f}<extra></extra>'
-        ))
-
-    # FORECAST DATA
-    if not forecast_df.empty:
-        # Connect the last historical point to the first forecast point
-        if not historical_df.empty:
-            last_historical_point = historical_df.iloc[-1]
-            first_forecast_point = forecast_df.iloc[0]
-            
-            # Add connecting line
-            fig.add_trace(go.Scatter(
-                x=[last_historical_point['ds'], first_forecast_point['date']],
-                y=[last_historical_point['y'], first_forecast_point['prediction']],
-                mode='lines',
-                name='Transition',
-                line=dict(color='#A23B72', width=3, dash='dash'),
-                showlegend=False,
-                hovertemplate=False
-            ))
-
-        # Add forecast line
-        fig.add_trace(go.Scatter(
-            x=forecast_df['date'], 
-            y=forecast_df['prediction'],
-            mode='lines+markers',
-            name=f'🎯 {model_type} Forecast',
-            line=dict(color='#F18F01', width=4),
-            marker=dict(size=6, color='#F18F01', symbol='diamond'),
-            hovertemplate='<b>Forecast</b><br>Date: %{x}<br>Predicted Sales: $%{y:,.0f}<extra></extra>'
-        ))
-
-    # Add clear separation between historical and forecast
-    if not historical_df.empty and not forecast_df.empty:
-        last_historical_date = historical_df['ds'].max()
-        
-        # Add vertical separation line
-        fig.add_shape(
-            type="line",
-            x0=last_historical_date,
-            x1=last_historical_date,
-            y0=0,
-            y1=1,
-            xref="x",
-            yref="paper",
-            line=dict(color="red", width=3, dash="dot")
-        )
-
-        # Add separation annotation
-        fig.add_annotation(
-            x=last_historical_date,
-            y=0.02,
-            xref="x",
-            yref="paper",
-            text="FORECAST START",
-            showarrow=False,
-            bgcolor="red",
-            font=dict(color="white", size=12, weight="bold"),
-            yshift=-10
-        )
-
-    # Update layout for better visualization
-    fig.update_layout(
-        title={
-            'text': f"📈 Sales Timeline: Historical Data vs {model_type} Forecast",
-            'x': 0.5,
-            'xanchor': 'center',
-            'font': {'size': 20}
-        },
-        xaxis_title="Date",
-        yaxis_title="Sales Amount ($)",
-        height=600,
-        showlegend=True,
-        hovermode='x unified',
-        legend=dict(
-            yanchor="top",
-            y=0.99,
-            xanchor="left",
-            x=0.01,
-            bgcolor='rgba(255,255,255,0.9)',
-            bordercolor='black',
-            borderwidth=1
-        ),
-        plot_bgcolor='rgba(240,240,240,0.8)'
-    )
-
-    # Add grid for better readability
-    fig.update_xaxis(showgrid=True, gridwidth=1, gridcolor='lightgray')
-    fig.update_yaxis(showgrid=True, gridwidth=1, gridcolor='lightgray')
-    
-    return fig
