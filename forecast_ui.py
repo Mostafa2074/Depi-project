@@ -1,3 +1,4 @@
+# [file name]: forecast_ui.py
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
@@ -8,25 +9,37 @@ def run_forecast_app(model, prophet_df, model_type="unknown"):
     st.title("📈 Time Series Forecasting (MLflow Production Model)")
     
     if model is None:
-        st.error("No production model found in MLflow Registry.")
+        st.error("❌ No production model found in MLflow Registry.")
         st.info("""
         **To use the Forecast Engine:**
+        
         1. Go to **🔬 MLflow Tracking** tab
-        2. Train a model (LightGBM or ARIMA)
-        3. The model will be automatically registered
-        4. Return here to make predictions
+        2. Load your training dataset (`model_dataset.csv`)
+        3. Train at least one model (Prophet, ARIMA, or LightGBM)
+        4. Promote the best model to **Production** stage
+        5. Return here to make forecasts
         """)
+        
+        with st.expander("📊 Current Data Overview"):
+            if not prophet_df.empty:
+                st.write("**Available Historical Data:**")
+                st.write(f"- Date range: {prophet_df['ds'].min().date()} to {prophet_df['ds'].max().date()}")
+                st.write(f"- Total records: {len(prophet_df):,}")
+                st.write(f"- Sales range: ${prophet_df['y'].min():,.0f} to ${prophet_df['y'].max():,.0f}")
+            else:
+                st.warning("No historical data available for forecasting")
+        
         return
     
     # Display model info
     st.sidebar.header("Model Information")
     st.sidebar.info(f"**Model Type:** {model_type}")
-    st.sidebar.info(f"**Source:** MLflow Model Registry")
+    st.sidebar.info(f"**Source:** MLflow Model Registry (Production)")
     
     # Model info section
     with st.expander("ℹ️ Model Details"):
         st.write(f"**Loaded Model Type:** {model_type}")
-        st.write("**Source:** MLflow Model Registry")
+        st.write("**Source:** MLflow Model Registry - Production Stage")
         if not prophet_df.empty:
             data_last_date = prophet_df['ds'].max().date()
             st.write(f"**Current Data Up To:** {data_last_date}")
@@ -42,7 +55,7 @@ def run_forecast_app(model, prophet_df, model_type="unknown"):
     st.markdown("---")
 
     # ========================================================================
-    # MODE 1: BATCH PREDICTIONS
+    # MODE 1: BATCH PREDICTIONS (UPDATED WITH DATE INPUT)
     # ========================================================================
     if prediction_mode == "📦 Batch Predictions":
         st.sidebar.header("Batch Forecast Settings")
@@ -118,14 +131,11 @@ def run_forecast_app(model, prophet_df, model_type="unknown"):
         with col2:
             st.markdown("###")
             if st.button("Predict"):
-                try:
-                    # Pass prophet_df to real_time_predict_mlflow for ARIMA context
-                    res = real_time_predict_mlflow(model, model_type, pd.to_datetime(target_date), prophet_df=prophet_df)
-                    if 'real_time_predictions' not in st.session_state:
-                        st.session_state.real_time_predictions = []
-                    st.session_state.real_time_predictions.insert(0, res)
-                except Exception as e:
-                    st.error(f"Prediction failed: {e}")
+                # Pass prophet_df to real_time_predict_mlflow for ARIMA context
+                res = real_time_predict_mlflow(model, model_type, pd.to_datetime(target_date), prophet_df=prophet_df)
+                if 'real_time_predictions' not in st.session_state:
+                    st.session_state.real_time_predictions = []
+                st.session_state.real_time_predictions.insert(0, res)
         
         if st.session_state.get('real_time_predictions'):
             latest = st.session_state.real_time_predictions[0]
@@ -164,7 +174,6 @@ def run_forecast_app(model, prophet_df, model_type="unknown"):
             else:
                 st.error(f"Prediction error: {latest.get('error', 'Unknown error')}")
 
-
 def display_mlflow_forecast_results(forecast_data, prophet_df, model_type, end_date=None, periods=None):
     """Display forecast results for MLflow models."""
     
@@ -198,9 +207,9 @@ def display_mlflow_forecast_results(forecast_data, prophet_df, model_type, end_d
             y=prophet_df['y'],
             mode='lines+markers',
             name='Historical Sales',
-            line=dict(color='#1abc9c', width=2),
+            line=dict(color='#1abc9c', width=2),  # Same color as forecast
             marker=dict(color='#1abc9c', size=4),
-            opacity=0.4
+            opacity=0.4  # Slight fade to distinguish history
         ))
 
     # Forecast Line
