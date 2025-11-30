@@ -1,53 +1,50 @@
+# [file name]: data_loader.py
 import streamlit as st
 import pandas as pd
+import zipfile
 import os
-from datetime import date
 from project_paths import get_model_paths
 
 @st.cache_data
 def load_data():
-    """
-    Loads data from Data.zip. 
-    Returns the dataframe and key date metrics.
-    """
-    # GET DYNAMIC PATH
-    paths = get_model_paths()
-    DATA_PATH = paths['data_zip']
-    
-    if not os.path.exists(DATA_PATH):
-        st.warning(f"Data file not found at: {DATA_PATH}")
-        return pd.DataFrame(), date.today(), date.today(), pd.Series(dtype='float64'), pd.DataFrame()
-
+    """Load and prepare data for the application"""
     try:
-        # Handle zip file
-        train = pd.read_csv(DATA_PATH)
+        paths = get_model_paths()
         
-        # Date conversion
-        train["date"] = pd.to_datetime(train["date"], errors="coerce")
-        train = train.dropna(subset=['date'])
-        train = train.set_index("date")
-        train.index = pd.to_datetime(train.index)
-
-        # Basic Metrics
-        min_date = train.index.min().date()
-        max_date = train.index.max().date()
+        # Try to load from model_dataset.csv first
+        if os.path.exists(paths['dataset']):
+            train = pd.read_csv(paths['dataset'], parse_dates=['date'])
+            st.success("Loaded data from model_dataset.csv")
+        else:
+            # Fallback: use file uploader
+            st.info("Upload your dataset CSV file:")
+            uploaded_file = st.file_uploader("Choose a CSV file", type="csv")
+            if uploaded_file is not None:
+                train = pd.read_csv(uploaded_file, parse_dates=['date'])
+                st.success("Dataset loaded successfully!")
+            else:
+                st.warning("Please upload a dataset CSV file")
+                return pd.DataFrame(), None, None, None, pd.DataFrame()
         
-        # State Sorting for Dashboard
-        if 'state' in train.columns and 'sales' in train.columns:
+        # Basic data preparation
+        if 'date' in train.columns:
+            train = train.sort_values('date')
+            min_date = train['date'].min()
+            max_date = train['date'].max()
+        else:
+            min_date = max_date = None
+            
+        # Prepare state data if available
+        if 'state' in train.columns:
             sort_state = train.groupby('state')['sales'].sum().sort_values(ascending=False)
         else:
-            sort_state = pd.Series(dtype='float64')
-
-        # Prepare Prophet Dataframe (aggregated by date) for visualization
-        if 'sales' in train.columns:
-            prophet_df = train.groupby(train.index)['sales'].sum().reset_index()
-            prophet_df.columns = ['ds', 'y']
-            prophet_df['ds'] = pd.to_datetime(prophet_df['ds'])
-        else:
-            prophet_df = pd.DataFrame(columns=['ds', 'y'])
-
+            sort_state = pd.Series()
+            
+        # Prepare Prophet format data
+        prophet_df = train.rename(columns={'date': 'ds', 'sales': 'y'})[['ds', 'y']] if 'sales' in train.columns else pd.DataFrame()
+        
         return train, min_date, max_date, sort_state, prophet_df
-
+        
     except Exception as e:
         st.error(f"Error loading data: {e}")
-        return pd.DataFrame(), date.today(), date.today(), pd.Series(dtype='float64'), pd.DataFrame()
+        return pd.DataFrame(), None, None, None, pd.DataFrame()
