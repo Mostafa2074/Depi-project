@@ -188,6 +188,12 @@ def get_model_type_from_registry(model_name="BestForecastModels", stage="Product
             # Get the run details to check model type
             run = client.get_run(run_id)
             model_type = run.data.tags.get("model_type", "unknown")
+            
+            # If it's prophet but we can't use it, default to lightgbm
+            if model_type == "prophet":
+                st.warning("⚠️ Prophet model detected but unavailable. Using fallback.")
+                return "lightgbm"
+                
             return model_type
         return "unknown"
     except Exception as e:
@@ -279,4 +285,5 @@ def recreate_model_registry():
                 st.error(f"Failed to re-register run {run.info.run_id}: {e}")
                 
     except Exception as e:
+
         st.error(f"Error recreating model registry: {e}")
