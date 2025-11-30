@@ -123,7 +123,7 @@ def main():
     )
     
     # Add data source info to sidebar
-    st.sidebar.markdown("---")
+    # st.sidebar.markdown("---")
     # st.sidebar.info("**Data Sources:**\n"
                    # "- Dashboard: Data.csv from Data.zip\n"
                    # "- Training: model_dataset.csv")
@@ -153,5 +153,6 @@ def main():
 
 if __name__ == '__main__':
     main()
+
 
 
