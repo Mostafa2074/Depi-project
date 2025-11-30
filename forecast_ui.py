@@ -229,72 +229,72 @@ def display_mlflow_forecast_results(forecast_data, prophet_df, model_type, end_d
         display_df = display_df.rename(columns={'date': 'Date', 'prediction': 'Predicted Sales'})
         st.dataframe(display_df, use_container_width=True, height=300)
 
-    # 3. Interactive Chart
+    # 3. Interactive Chart - UPDATED TO MATCH SCREENSHOT
     st.subheader("📈 Forecast Visualization")
     
     fig = go.Figure()
 
-    # Actual Data (if available)
+    # Historical Data (if available) - using blue color from screenshot
     if not prophet_df.empty:
-        # Show last 90 days of historical data for context
-        recent_history = prophet_df.tail(90)
         fig.add_trace(go.Scatter(
-            x=recent_history['ds'], 
-            y=recent_history['y'],
-            mode='lines+markers',
+            x=prophet_df['ds'], 
+            y=prophet_df['y'],
+            mode='lines',
             name='Historical Sales',
-            line=dict(color='#1f77b4', width=3),
-            marker=dict(size=4, color='#1f77b4'),
+            line=dict(color='#1f77b4', width=2),
             opacity=0.8
         ))
 
-    # Forecast Line
+    # Forecast Data - using orange color from screenshot
     if not standardized_data.empty:
         fig.add_trace(go.Scatter(
             x=standardized_data['date'], 
             y=standardized_data['prediction'],
-            mode='lines+markers',
+            mode='lines',
             name=f'{model_type} Forecast',
-            line=dict(color='#ff7f0e', width=3, dash='dash'),
-            marker=dict(size=5, color='#ff7f0e')
+            line=dict(color='#ff7f0e', width=2),
+            opacity=0.8
         ))
 
-    # Add vertical line separating history and forecast
-    if not prophet_df.empty and not standardized_data.empty:
-        last_historical_date = prophet_df['ds'].max()
-        first_forecast_date = standardized_data['date'].min()
-
-        fig.add_shape(
-            type="line",
-            x0=last_historical_date,
-            x1=last_historical_date,
-            y0=0,
-            y1=1,
-            xref="x",
-            yref="paper",
-            line=dict(color="red", width=3, dash="dot")
-        )
-
-        fig.add_annotation(
-            x=last_historical_date,
-            y=0.95,
-            xref="x",
-            yref="paper",
-            text="Forecast Start",
-            showarrow=True,
-            arrowhead=2,
-            bgcolor="red",
-            font=dict(color="white")
-        )
-
+    # Update layout to match screenshot style
     fig.update_layout(
-        title=f"Sales Forecast using {model_type} Model",
+        title=f"Sales Forecast using {model_type.lower()}",
         xaxis_title="Date",
-        yaxis_title="Sales Amount ($)",
-        height=600,
+        yaxis_title="Sales",
+        height=500,
         showlegend=True,
-        hovermode='x unified'
+        hovermode='x unified',
+        plot_bgcolor='white',
+        # Y-axis formatting to show "M" for millions
+        yaxis=dict(
+            tickformat='.1f',
+            tickprefix='$',
+            ticksuffix='M',
+            # Adjust range to match typical sales data (0-1.5M)
+            range=[0, max(prophet_df['y'].max() if not prophet_df.empty else 0, 
+                         standardized_data['prediction'].max() if not standardized_data.empty else 0) * 1.1]
+        ),
+        xaxis=dict(
+            showgrid=True,
+            gridcolor='lightgray'
+        ),
+        font=dict(
+            family="Arial, sans-serif",
+            size=12,
+            color="black"
+        ),
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=1.02,
+            xanchor="right",
+            x=1
+        )
     )
+
+    # Add grid for better readability
+    fig.update_yaxes(showgrid=True, gridcolor='lightgray', gridwidth=1)
+    fig.update_xaxes(showgrid=True, gridcolor='lightgray', gridwidth=1)
     
     st.plotly_chart(fig, use_container_width=True)
 
@@ -308,7 +308,7 @@ def display_mlflow_forecast_results(forecast_data, prophet_df, model_type, end_d
         download_df['date'] = download_df['date'].dt.strftime('%Y-%m-%d')
         csv_formatted = download_df.to_csv(index=False)
         st.download_button(
-            label="📥 Download as CSV",
+            label="📥 Download Forecast as CSV",
             data=csv_formatted,
             file_name=f"forecast_{model_type}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
             mime="text/csv",
