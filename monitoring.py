@@ -138,9 +138,10 @@ def test_email_connection(recipient_email):
     """Test email connection and send a test message"""
     try:
         # Check if email credentials are available in secrets
-        if not st.secrets.get("EMAIL"):
-            st.error("Email configuration not found in secrets. Please configure EMAIL section in .streamlit/secrets.toml")
-            return
+        # if not st.secrets.get("EMAIL"):
+        #     st.error("Email configuration not found in secrets. Please configure EMAIL section in .streamlit/secrets.toml")
+        #     return
+        print('M')
             
         email_alert = EmailAlert.get_instance()
         
@@ -1007,3 +1008,4 @@ def display_comparison_analysis(comparison_df, pred_df, email_enabled=False, rec
                 file_name=f"raw_monitoring_data_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
                 mime="text/csv",
             )
+
