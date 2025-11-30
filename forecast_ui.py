@@ -413,8 +413,8 @@ def create_combined_historical_forecast_chart(historical_df, forecast_df, model_
         plot_bgcolor='rgba(240,240,240,0.8)'
     )
 
-    # Add grid for better readability
-    fig.update_xaxis(showgrid=True, gridwidth=1, gridcolor='lightgray')
-    fig.update_yaxis(showgrid=True, gridwidth=1, gridcolor='lightgray')
+    # Add grid for better readability - FIXED THE ERROR HERE
+    fig.update_xaxes(showgrid=True, gridwidth=1, gridcolor='lightgray')
+    fig.update_yaxes(showgrid=True, gridwidth=1, gridcolor='lightgray')
     
     return fig
