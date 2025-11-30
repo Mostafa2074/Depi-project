@@ -4,6 +4,7 @@ import pandas as pd
 import zipfile
 import os
 from project_paths import get_model_paths
+import numpy as np
 
 @st.cache_data
 def load_data():
@@ -62,3 +63,4 @@ def load_data():
         st.error(f"Error loading data: {e}")
         # Return empty dataframes to prevent crashes
         return pd.DataFrame(), None, None, pd.Series(), pd.DataFrame()
+
