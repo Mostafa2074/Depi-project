@@ -48,12 +48,12 @@ mlflow.set_tracking_uri("./mlruns")
 
 def setup_mlflow_utilities():
     """Setup MLflow utility functions in sidebar"""
-    st.sidebar.subheader("🔧 MLflow Utilities")
+    # st.sidebar.subheader("🔧 MLflow Utilities")
     
     # Add registry status check
-    if st.sidebar.button("📊 Check Registry Status"):
-        from model_registry import check_registry_status
-        check_registry_status()
+    # if st.sidebar.button("📊 Check Registry Status"):
+    #     from model_registry import check_registry_status
+    #     check_registry_status()
     
     # col1, col2 = st.sidebar.columns(2)
     
@@ -153,6 +153,7 @@ def main():
 
 if __name__ == '__main__':
     main()
+
 
 
 
