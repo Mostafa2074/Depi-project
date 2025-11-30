@@ -229,34 +229,40 @@ def display_mlflow_forecast_results(forecast_data, prophet_df, model_type, end_d
         display_df = display_df.rename(columns={'date': 'Date', 'prediction': 'Predicted Sales'})
         st.dataframe(display_df, use_container_width=True, height=300)
 
-    # 3. Interactive Chart - UPDATED TO MATCH SCREENSHOT
+    # 3. Interactive Chart - FIXED VERSION
     st.subheader("📈 Forecast Visualization")
     
     fig = go.Figure()
 
-    # Historical Data (if available) - using blue color from screenshot
+    # Convert data to millions for display
     if not prophet_df.empty:
+        prophet_df_display = prophet_df.copy()
+        prophet_df_display['y_display'] = prophet_df_display['y'] / 1000000  # Convert to millions
+        
         fig.add_trace(go.Scatter(
-            x=prophet_df['ds'], 
-            y=prophet_df['y'],
+            x=prophet_df_display['ds'], 
+            y=prophet_df_display['y_display'],
             mode='lines',
             name='Historical Sales',
             line=dict(color='#1f77b4', width=2),
             opacity=0.8
         ))
 
-    # Forecast Data - using orange color from screenshot
+    # Convert forecast data to millions for display
     if not standardized_data.empty:
+        standardized_data_display = standardized_data.copy()
+        standardized_data_display['prediction_display'] = standardized_data_display['prediction'] / 1000000  # Convert to millions
+        
         fig.add_trace(go.Scatter(
-            x=standardized_data['date'], 
-            y=standardized_data['prediction'],
+            x=standardized_data_display['date'], 
+            y=standardized_data_display['prediction_display'],
             mode='lines',
             name=f'{model_type} Forecast',
             line=dict(color='#ff7f0e', width=2),
             opacity=0.8
         ))
 
-    # Update layout to match screenshot style
+    # Update layout to match screenshot style - SIMPLIFIED
     fig.update_layout(
         title=f"Sales Forecast using {model_type.lower()}",
         xaxis_title="Date",
@@ -265,19 +271,6 @@ def display_mlflow_forecast_results(forecast_data, prophet_df, model_type, end_d
         showlegend=True,
         hovermode='x unified',
         plot_bgcolor='white',
-        # Y-axis formatting to show "M" for millions
-        yaxis=dict(
-            tickformat='.1f',
-            tickprefix='$',
-            ticksuffix='M',
-            # Adjust range to match typical sales data (0-1.5M)
-            range=[0, max(prophet_df['y'].max() if not prophet_df.empty else 0, 
-                         standardized_data['prediction'].max() if not standardized_data.empty else 0) * 1.1]
-        ),
-        xaxis=dict(
-            showgrid=True,
-            gridcolor='lightgray'
-        ),
         font=dict(
             family="Arial, sans-serif",
             size=12,
@@ -293,8 +286,18 @@ def display_mlflow_forecast_results(forecast_data, prophet_df, model_type, end_d
     )
 
     # Add grid for better readability
-    fig.update_yaxes(showgrid=True, gridcolor='lightgray', gridwidth=1)
-    fig.update_xaxes(showgrid=True, gridcolor='lightgray', gridwidth=1)
+    fig.update_yaxes(
+        showgrid=True, 
+        gridcolor='lightgray', 
+        gridwidth=1,
+        tickformat='.1f',  # 1 decimal place
+        ticksuffix='M'     # Add M for millions
+    )
+    fig.update_xaxes(
+        showgrid=True, 
+        gridcolor='lightgray', 
+        gridwidth=1
+    )
     
     st.plotly_chart(fig, use_container_width=True)
 
@@ -324,3 +327,4 @@ def display_mlflow_forecast_results(forecast_data, prophet_df, model_type, end_d
             file_name=f"raw_forecast_{model_type}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
             mime="text/csv"
         )
+
