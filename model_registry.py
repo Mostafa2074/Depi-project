@@ -149,6 +149,8 @@ def try_reconstruct_from_run(model_uri, client, model_version):
         st.sidebar.warning(f"⚠️ Reconstruction strategy failed: {e}")
         return None
 
+# In model_registry.py, update the get_model_type_from_registry function:
+
 def get_model_type_from_registry(model_name="BestForecastModels", stage="Production"):
     """Determine the type of model in the registry."""
     try:
@@ -163,6 +165,11 @@ def get_model_type_from_registry(model_name="BestForecastModels", stage="Product
             # Get the run details to check model type
             run = client.get_run(run_id)
             model_type = run.data.tags.get("model_type", "unknown")
+            
+            # Debug information
+            st.sidebar.info(f"🔍 Detected model type: {model_type}")
+            st.sidebar.info(f"📝 Run tags: {run.data.tags}")
+            
             return model_type
         return "unknown"
     except Exception as e:
@@ -281,3 +288,4 @@ def check_registry_status():
                 
     except Exception as e:
         st.sidebar.error(f"❌ Error checking registry status: {e}")
+
