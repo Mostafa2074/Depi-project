@@ -1,7 +1,7 @@
-# [file name]: forecast_ui.py
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
+import zipfile  # Add this import
 from datetime import date, datetime, timedelta
 from predictions import batch_predict_mlflow, real_time_predict_mlflow, standardize_forecast_data
 
@@ -384,3 +384,4 @@ def load_historical_data():
     except Exception as e:
         st.sidebar.warning(f"❌ Error loading historical data: {e}. Using provided prophet_df instead.")
         return pd.DataFrame()
+
