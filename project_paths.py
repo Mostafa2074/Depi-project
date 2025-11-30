@@ -25,10 +25,11 @@ def get_model_paths():
     
     # Create necessary directories
     os.makedirs("mlruns", exist_ok=True)
+    os.makedirs(os.path.join(root, "models"), exist_ok=True)
     
     return {
-        'dataset': os.path.join(root, "model_dataset.csv"),  # Keep for backward compatibility
-        'data_zip': os.path.join(root, "Data.zip"),  # Primary data source
+        'dataset': os.path.join(root, "model_dataset.csv"),  # For training
+        'data_zip': os.path.join(root, "Data.zip"),  # For dashboard
         'actual_dataset': os.path.join(root, "actual_dataset.csv"),
         'models_folder': os.path.join(root, "models"),
         'prophet_model': os.path.join(root, "models", "prophet_tuned_model.pkl"),
