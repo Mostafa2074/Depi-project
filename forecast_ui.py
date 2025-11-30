@@ -203,51 +203,140 @@ def display_mlflow_forecast_results(forecast_data, prophet_df, model_type, end_d
     
     st.subheader("📊 Forecast Results")
     
+    # Debug information
+    with st.expander("🔍 Debug Info"):
+        st.write("**forecast_data info:**")
+        st.write(f"Type: {type(forecast_data)}")
+        st.write(f"Empty: {forecast_data.empty}")
+        st.write(f"Columns: {list(forecast_data.columns) if not forecast_data.empty else 'N/A'}")
+        if not forecast_data.empty:
+            st.write(f"Shape: {forecast_data.shape}")
+            st.write("First few rows:")
+            st.dataframe(forecast_data.head())
+        
+        st.write("**prophet_df info:**")
+        st.write(f"Type: {type(prophet_df)}")
+        st.write(f"Empty: {prophet_df.empty}")
+        st.write(f"Columns: {list(prophet_df.columns) if not prophet_df.empty else 'N/A'}")
+        if not prophet_df.empty:
+            st.write(f"Shape: {prophet_df.shape}")
+            st.write("First few rows:")
+            st.dataframe(prophet_df.head())
+    
     # Ensure we have standardized data
     standardized_data = standardize_forecast_data(forecast_data, model_type)
+    
+    st.write(f"**After standardization - Empty: {standardized_data.empty}**")
     
     if standardized_data.empty:
         st.error("No valid forecast data to display.")
         return
     
-    # ... keep the summary and table sections the same ...
+    # 1. Forecast Summary
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("Forecast Periods", f"{len(standardized_data)} days")
+    with col2:
+        avg_prediction = standardized_data['prediction'].mean()
+        st.metric("Average Prediction", f"${avg_prediction:,.0f}")
+    with col3:
+        total_prediction = standardized_data['prediction'].sum()
+        st.metric("Total Predicted Sales", f"${total_prediction:,.0f}")
+    
+    # 2. Data Table
+    with st.expander("📋 Forecast Data Table", expanded=True):
+        display_df = standardized_data.copy()
+        display_df['date'] = display_df['date'].dt.strftime('%Y-%m-%d')
+        display_df['prediction'] = display_df['prediction'].round(2)
+        display_df = display_df.rename(columns={'date': 'Date', 'prediction': 'Predicted Sales'})
+        st.dataframe(display_df, use_container_width=True, height=300)
 
-    # 3. SIMPLEST Chart version - just basic Plotly
+    # 3. Interactive Chart - MINIMAL TEST VERSION
     st.subheader("📈 Forecast Visualization")
     
-    fig = go.Figure()
-
-    # Historical Data
-    if not prophet_df.empty:
-        fig.add_trace(go.Scatter(
-            x=prophet_df['ds'], 
-            y=prophet_df['y'],
-            mode='lines',
-            name='Historical Sales',
-            line=dict(color='#1f77b4', width=2)
-        ))
-
-    # Forecast Data
-    if not standardized_data.empty:
-        fig.add_trace(go.Scatter(
-            x=standardized_data['date'], 
-            y=standardized_data['prediction'],
-            mode='lines',
-            name=f'{model_type} Forecast',
-            line=dict(color='#ff7f0e', width=2)
-        ))
-
-    # Basic layout
-    fig.update_layout(
-        title=f"Sales Forecast using {model_type.lower()}",
-        xaxis_title="Date",
-        yaxis_title="Sales ($)",
-        height=500
-    )
+    # Test with simplest possible chart first
+    st.write("Creating basic test chart...")
     
-    st.plotly_chart(fig, use_container_width=True)
+    try:
+        # Create a simple test chart with minimal data
+        fig = go.Figure()
+        
+        # Add some test data to see if chart renders at all
+        fig.add_trace(go.Scatter(
+            x=[1, 2, 3, 4, 5],
+            y=[10, 11, 12, 13, 14],
+            mode='lines',
+            name='Test Data'
+        ))
+        
+        fig.update_layout(
+            title="Test Chart - Should Always Display",
+            height=400
+        )
+        
+        st.plotly_chart(fig, use_container_width=True)
+        st.success("✓ Test chart displayed successfully")
+        
+    except Exception as e:
+        st.error(f"❌ Test chart failed: {e}")
+        return
+    
+    # Now try with actual data
+    st.write("Now trying with actual forecast data...")
+    
+    try:
+        fig2 = go.Figure()
 
-    # ... keep download section the same ...
+        # Historical Data - with validation
+        if not prophet_df.empty and 'ds' in prophet_df.columns and 'y' in prophet_df.columns:
+            # Check for valid data types
+            st.write(f"Historical data dates type: {type(prophet_df['ds'].iloc[0])}")
+            st.write(f"Historical data values type: {type(prophet_df['y'].iloc[0])}")
+            
+            fig2.add_trace(go.Scatter(
+                x=prophet_df['ds'], 
+                y=prophet_df['y'],
+                mode='lines',
+                name='Historical Sales',
+                line=dict(color='blue', width=2)
+            ))
+            st.success("✓ Historical data added to chart")
+        else:
+            st.warning("No valid historical data available for chart")
+
+        # Forecast Data - with validation
+        if not standardized_data.empty and 'date' in standardized_data.columns and 'prediction' in standardized_data.columns:
+            # Check for valid data types
+            st.write(f"Forecast dates type: {type(standardized_data['date'].iloc[0])}")
+            st.write(f"Forecast values type: {type(standardized_data['prediction'].iloc[0])}")
+            
+            fig2.add_trace(go.Scatter(
+                x=standardized_data['date'], 
+                y=standardized_data['prediction'],
+                mode='lines',
+                name=f'{model_type} Forecast',
+                line=dict(color='orange', width=2)
+            ))
+            st.success("✓ Forecast data added to chart")
+        else:
+            st.warning("No valid forecast data available for chart")
+
+        # Basic layout
+        fig2.update_layout(
+            title=f"Sales Forecast using {model_type}",
+            xaxis_title="Date",
+            yaxis_title="Sales ($)",
+            height=500,
+            showlegend=True
+        )
+
+        st.plotly_chart(fig2, use_container_width=True)
+        st.success("✓ Main forecast chart displayed successfully")
+        
+    except Exception as e:
+        st.error(f"❌ Main chart failed: {e}")
+        import traceback
+        st.error(f"Detailed error: {traceback.format_exc()}")
 
     # 4. Download option
     st.subheader("📥 Download Forecast")
