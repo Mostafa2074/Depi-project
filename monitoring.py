@@ -174,6 +174,7 @@ def send_high_error_alert(recipient_email, error_data, comparison_stats):
     """Send email alert for high prediction error"""
     try:
         if not EMAIL_ALERTS_AVAILABLE:
+            st.warning("Email alerts not available - EMAIL_ALERTS_AVAILABLE is False")
             return False
             
         email_alert = EmailAlert.get_instance()
@@ -204,13 +205,17 @@ def send_high_error_alert(recipient_email, error_data, comparison_stats):
         email_content.prepare_html()
         
         # Send alert email
-        email_alert.send_email(email_content)
-        return True
+        success = email_alert.send_email(email_content)
+        if success:
+            print("✅ Email sent successfully!")
+        return success
         
     except Exception as e:
         st.error(f"Failed to send email alert: {e}")
+        import traceback
+        st.error(f"Detailed error: {traceback.format_exc()}")
         return False
-
+        
 def get_latest_prediction_from_mlflow():
     """Fetch the latest prediction file directly from MLflow"""
     try:
@@ -1007,3 +1012,31 @@ def display_comparison_analysis(comparison_df, pred_df, email_enabled=False, rec
                 file_name=f"raw_monitoring_data_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
                 mime="text/csv",
             )
+
+def test_email_system():
+    """Test the email system independently"""
+    try:
+        # Test EmailAlert initialization
+        email_alert = EmailAlert.get_instance()
+        st.success("✅ EmailAlert initialized successfully")
+        
+        # Test EmailContent
+        email_content = EmailContent()
+        email_content.recipient = "test@example.com"  # Use a test email
+        email_content.subject = "Test Email"
+        email_content.message_body = {
+            'title': 'Test',
+            'message': 'This is a test message',
+            'table_rows': {'Test': 'Value'},
+            'notes': 'Test notes'
+        }
+        email_content.prepare_html()
+        st.success("✅ EmailContent created successfully")
+        
+        return True
+    except Exception as e:
+        st.error(f"❌ Email system test failed: {e}")
+        import traceback
+        st.code(traceback.format_exc())
+        return False
+
