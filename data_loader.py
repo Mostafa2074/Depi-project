@@ -8,7 +8,7 @@ from project_paths import get_model_paths
 
 @st.cache_data
 def load_data():
-    """Load and prepare data from Data.zip"""
+    """Load and prepare data from Data.zip for Dashboard"""
     try:
         paths = get_model_paths()
         data_zip_path = paths['data_zip']
@@ -23,7 +23,7 @@ def load_data():
                 file_list = zip_ref.namelist()
                 st.info(f"Files in zip: {file_list}")
                 
-                # Look for Data.csv (changed from train.csv)
+                # Look for Data.csv for dashboard
                 data_file = None
                 for file in file_list:
                     if file.lower() == 'data.csv' or file.lower().endswith('/data.csv'):
@@ -39,7 +39,7 @@ def load_data():
                     if 'date' in train.columns:
                         train['date'] = pd.to_datetime(train['date'])
                     
-                    st.success(f"✅ Successfully loaded data from {data_file} in Data.zip")
+                    st.success(f"✅ Successfully loaded dashboard data from {data_file} in Data.zip")
                     
                 else:
                     st.error("No Data.csv file found in Data.zip")
@@ -48,7 +48,7 @@ def load_data():
                     
         else:
             st.warning(f"Data.zip not found at {data_zip_path}")
-            st.info("Please ensure Data.zip is in your project directory")
+            st.info("Please ensure Data.zip is in your project directory for dashboard functionality")
             
             # Fallback: try to load from uploaded file
             st.info("Alternatively, upload your dataset CSV file:")
@@ -100,7 +100,7 @@ def load_data():
         return train, min_date, max_date, sort_state, prophet_df
         
     except Exception as e:
-        st.error(f"Error loading data: {e}")
+        st.error(f"Error loading dashboard data: {e}")
         import traceback
         st.error(f"Detailed error: {traceback.format_exc()}")
         # Return empty dataframes to prevent crashes
