@@ -82,8 +82,9 @@ def run_monitoring_app():
             st.success(f"✅ Loaded actual dataset from {actual_dataset_path}")
         
         # Show actual data date range
-        if not actual_df.empty:
-            st.info(f"📅 Actual data range: {actual_df['date'].min().date()} to {actual_df['date'].max().date()}")
+        # if not actual_df.empty:
+            # st.info(f"📅 Actual data range: {actual_df['date'].min().date()} to {actual_df['date'].max().date()}")
+            
     except Exception as e:
         st.error(f"❌ Could not load actual dataset: {e}")
         st.info("Please ensure 'actual_dataset.csv' exists in your directory or upload it")
@@ -97,7 +98,7 @@ def run_monitoring_app():
         return
     
     # Show prediction data source and range
-    st.success(f"✅ Loaded predictions from MLflow (latest run)")
+    # st.success(f"✅ Loaded predictions from MLflow (latest run)")
     st.info(f"📅 Prediction data range: {prediction_data['date'].min().date()} to {prediction_data['date'].max().date()}")
     
     # Check if we have overlapping dates
@@ -237,7 +238,7 @@ def get_latest_prediction_from_mlflow():
         for run in runs:
             result = extract_predictions_from_mlflow_run(run)
             if result is not None and not result.empty:
-                st.info(f"📁 Using predictions from MLflow run: {run.info.run_name}")
+                # st.info(f"📁 Using predictions from MLflow run: {run.info.run_name}")
                 return result
         
         # If no predictions found in runs, check the prediction_logs experiment
@@ -949,7 +950,7 @@ def display_comparison_analysis(comparison_df, pred_df, email_enabled=False, rec
                 
                 # Quick countdown before stopping
                 for i in range(2, 0, -1):
-                    status_placeholder.warning(f"🛑 Stopping in {i}...")
+                    # status_placeholder.warning(f"🛑 Stopping in {i}...")
                     time.sleep(0.5)
                 break
             else:
@@ -1008,4 +1009,5 @@ def display_comparison_analysis(comparison_df, pred_df, email_enabled=False, rec
                 file_name=f"raw_monitoring_data_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
                 mime="text/csv",
             )
+
 
