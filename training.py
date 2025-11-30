@@ -78,15 +78,29 @@ LIGHTGBM_REGISTRY_NAME = "BestForecastModels"
 BEST_MODELS_EXPERIMENT = "best_models"
 
 def setup_mlflow_experiment(experiment_name):
-    """Setup MLflow experiment with proper relative paths"""
-    # Ensure experiment exists
+    """Setup MLflow experiment with proper relative paths and error handling"""
+    # Ensure experiment exists with file store
     try:
+        # First try to get existing experiment
         experiment = mlflow.get_experiment_by_name(experiment_name)
         if experiment is None:
-            mlflow.create_experiment(experiment_name, artifact_location="file:./mlruns")
+            # Create experiment with file store
+            experiment_id = mlflow.create_experiment(
+                experiment_name, 
+                artifact_location="file:./mlruns"
+            )
+            st.info(f"Created new experiment: {experiment_name}")
+        else:
+            experiment_id = experiment.experiment_id
+            
         mlflow.set_experiment(experiment_name)
+        return experiment_id
+        
     except Exception as e:
         st.error(f"Error setting up experiment {experiment_name}: {e}")
+        # Fallback: use default experiment
+        mlflow.set_experiment("Default")
+        return "0"
 
 def reset_mlflow_completely():
     """Completely reset MLflow database and artifacts."""
@@ -385,7 +399,7 @@ def train_prophet_model(prophet_param_grid, prophet_input_example, prophet_model
     st.write("Starting Prophet Grid Search...")
     
     # Setup experiment with proper artifact location
-    setup_mlflow_experiment("prophet_test")
+    experiment_id = setup_mlflow_experiment("prophet_test")
     
     best_prophet_rmse = float("inf")
     best_prophet_mae = float("inf")
@@ -423,26 +437,20 @@ def train_prophet_model(prophet_param_grid, prophet_input_example, prophet_model
         }
 
         try:
-            with mlflow.start_run(run_name=run_name):
+            # Use try-except for MLflow operations
+            with mlflow.start_run(run_name=run_name, experiment_id=experiment_id):
                 mlflow.log_params(params)
 
                 model = Prophet(**params)
                 model.fit(st.session_state.mlflow_prophet_train_df)
 
-                # Forecast
-                forecast_train = model.predict(st.session_state.mlflow_prophet_train_df)
-                y_train_pred = forecast_train["yhat"]
-                train_rmse = mean_squared_error(st.session_state.mlflow_prophet_train_df["y"], y_train_pred) ** 0.5
-                train_mae = mean_absolute_error(st.session_state.mlflow_prophet_train_df["y"], y_train_pred)
-
+                # Forecast and calculate metrics
                 forecast_test = model.predict(st.session_state.mlflow_prophet_test_df)
                 y_test_pred = forecast_test["yhat"]
                 test_rmse = mean_squared_error(st.session_state.mlflow_prophet_test_df["y"], y_test_pred) ** 0.5
                 test_mae = mean_absolute_error(st.session_state.mlflow_prophet_test_df["y"], y_test_pred)
 
                 # Log metrics
-                mlflow.log_metric("train_rmse", train_rmse)
-                mlflow.log_metric("train_mae", train_mae)
                 mlflow.log_metric("test_rmse", test_rmse)
                 mlflow.log_metric("test_mae", test_mae)
 
@@ -457,7 +465,30 @@ def train_prophet_model(prophet_param_grid, prophet_input_example, prophet_model
                 progress_bar.progress(run_count / total_runs)
 
         except Exception as e:
-            st.error(f"Prophet Run {run_name} failed: {e}")
+            st.warning(f"Prophet Run {run_name} MLflow logging failed: {e}")
+            # Continue with training even if MLflow fails
+            try:
+                model = Prophet(**params)
+                model.fit(st.session_state.mlflow_prophet_train_df)
+                forecast_test = model.predict(st.session_state.mlflow_prophet_test_df)
+                y_test_pred = forecast_test["yhat"]
+                test_rmse = mean_squared_error(st.session_state.mlflow_prophet_test_df["y"], y_test_pred) ** 0.5
+                test_mae = mean_absolute_error(st.session_state.mlflow_prophet_test_df["y"], y_test_pred)
+
+                if test_rmse < best_prophet_rmse:
+                    best_prophet_rmse = test_rmse
+                    best_prophet_mae = test_mae
+                    best_prophet_params = params
+                    best_prophet_model = model
+
+                run_count += 1
+                progress_text.text(f"Prophet Run {run_count}/{total_runs} — MAE={test_mae:.2f}, RMSE={test_rmse:.2f}")
+                progress_bar.progress(run_count / total_runs)
+                
+            except Exception as inner_e:
+                st.error(f"Prophet Run {run_name} training failed: {inner_e}")
+
+    # Rest of the function remains the same...
 
     st.success(f"Prophet Grid search complete. Best RMSE={best_prophet_rmse:.2f}, Best MAE={best_prophet_mae:.2f}")
     st.write("Best Prophet Parameters:", best_prophet_params)
@@ -733,5 +764,6 @@ def train_lightgbm_model(lgb_param_grid, lgb_model_path, models_folder):
         st.info("Model saved locally and registered in MLflow. You can now use it in the Forecast Engine.")
     else:
         st.error("No valid LightGBM model was trained.")
+
 
 
