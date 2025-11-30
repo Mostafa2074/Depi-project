@@ -16,13 +16,19 @@ os.environ['MLFLOW_TRACKING_URI'] = './mlruns'  # Use file store instead of SQLi
 os.makedirs('./mlruns', exist_ok=True)
 
 # Now import other modules
-from data_loader import load_data
-from model_registry import load_production_model_from_registry, get_model_type_from_registry
-from dashboard import run_dashboard
-from forecast_ui import run_forecast_app
-from training import setup_mlflow_training, reset_mlflow_completely
-from monitoring import run_monitoring_app
-from model_registry import fix_mlflow_paths, recreate_model_registry as recreate_registry
+try:
+    from data_loader import load_data
+    from model_registry import load_production_model_from_registry, get_model_type_from_registry
+    from dashboard import run_dashboard
+    from forecast_ui import run_forecast_app
+    from training import setup_mlflow_training, reset_mlflow_completely
+    from monitoring import run_monitoring_app
+    from model_registry import fix_mlflow_paths, recreate_model_registry as recreate_registry
+except ImportError as e:
+    st.error(f"Import error: {e}")
+    st.info("Please make sure all required files are in the same directory")
+
+# Rest of your main.py code continues...
 
 # ============================================================================
 # PAGE CONFIGURATION
@@ -153,4 +159,5 @@ def main():
 
 if __name__ == '__main__':
     main()
+
 
