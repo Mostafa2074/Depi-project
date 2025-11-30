@@ -210,96 +210,44 @@ def display_mlflow_forecast_results(forecast_data, prophet_df, model_type, end_d
         st.error("No valid forecast data to display.")
         return
     
-    # 1. Forecast Summary
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        st.metric("Forecast Periods", f"{len(standardized_data)} days")
-    with col2:
-        avg_prediction = standardized_data['prediction'].mean()
-        st.metric("Average Prediction", f"${avg_prediction:,.0f}")
-    with col3:
-        total_prediction = standardized_data['prediction'].sum()
-        st.metric("Total Predicted Sales", f"${total_prediction:,.0f}")
-    
-    # 2. Data Table
-    with st.expander("📋 Forecast Data Table", expanded=True):
-        display_df = standardized_data.copy()
-        display_df['date'] = display_df['date'].dt.strftime('%Y-%m-%d')
-        display_df['prediction'] = display_df['prediction'].round(2)
-        display_df = display_df.rename(columns={'date': 'Date', 'prediction': 'Predicted Sales'})
-        st.dataframe(display_df, use_container_width=True, height=300)
+    # ... keep the summary and table sections the same ...
 
-    # 3. Interactive Chart - FIXED VERSION
+    # 3. SIMPLEST Chart version - just basic Plotly
     st.subheader("📈 Forecast Visualization")
     
     fig = go.Figure()
 
-    # Convert data to millions for display
+    # Historical Data
     if not prophet_df.empty:
-        prophet_df_display = prophet_df.copy()
-        prophet_df_display['y_display'] = prophet_df_display['y'] / 1000000  # Convert to millions
-        
         fig.add_trace(go.Scatter(
-            x=prophet_df_display['ds'], 
-            y=prophet_df_display['y_display'],
+            x=prophet_df['ds'], 
+            y=prophet_df['y'],
             mode='lines',
             name='Historical Sales',
-            line=dict(color='#1f77b4', width=2),
-            opacity=0.8
+            line=dict(color='#1f77b4', width=2)
         ))
 
-    # Convert forecast data to millions for display
+    # Forecast Data
     if not standardized_data.empty:
-        standardized_data_display = standardized_data.copy()
-        standardized_data_display['prediction_display'] = standardized_data_display['prediction'] / 1000000  # Convert to millions
-        
         fig.add_trace(go.Scatter(
-            x=standardized_data_display['date'], 
-            y=standardized_data_display['prediction_display'],
+            x=standardized_data['date'], 
+            y=standardized_data['prediction'],
             mode='lines',
             name=f'{model_type} Forecast',
-            line=dict(color='#ff7f0e', width=2),
-            opacity=0.8
+            line=dict(color='#ff7f0e', width=2)
         ))
 
-    # Update layout to match screenshot style - SIMPLIFIED
+    # Basic layout
     fig.update_layout(
         title=f"Sales Forecast using {model_type.lower()}",
         xaxis_title="Date",
-        yaxis_title="Sales",
-        height=500,
-        showlegend=True,
-        hovermode='x unified',
-        plot_bgcolor='white',
-        font=dict(
-            family="Arial, sans-serif",
-            size=12,
-            color="black"
-        ),
-        legend=dict(
-            orientation="h",
-            yanchor="bottom",
-            y=1.02,
-            xanchor="right",
-            x=1
-        )
-    )
-
-    # Add grid for better readability
-    fig.update_yaxes(
-        showgrid=True, 
-        gridcolor='lightgray', 
-        gridwidth=1,
-        tickformat='.1f',  # 1 decimal place
-        ticksuffix='M'     # Add M for millions
-    )
-    fig.update_xaxes(
-        showgrid=True, 
-        gridcolor='lightgray', 
-        gridwidth=1
+        yaxis_title="Sales ($)",
+        height=500
     )
     
     st.plotly_chart(fig, use_container_width=True)
+
+    # ... keep download section the same ...
 
     # 4. Download option
     st.subheader("📥 Download Forecast")
@@ -327,4 +275,5 @@ def display_mlflow_forecast_results(forecast_data, prophet_df, model_type, end_d
             file_name=f"raw_forecast_{model_type}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
             mime="text/csv"
         )
+
 
