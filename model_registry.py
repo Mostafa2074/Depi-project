@@ -145,11 +145,7 @@ def try_reconstruct_from_run(model_uri, client, model_version):
         
         # Add model-specific paths
         model_type = run.data.tags.get("model_type", "unknown")
-        if model_type == "prophet":
-            possible_paths.extend([
-                os.path.join(artifact_base, str(run.info.experiment_id), run_id, "artifacts", "prophet_model"),
-            ])
-        elif model_type == "arima":
+        if model_type == "arima":
             possible_paths.extend([
                 os.path.join(artifact_base, str(run.info.experiment_id), run_id, "artifacts", "arima_model"),
             ])
@@ -189,9 +185,9 @@ def get_model_type_from_registry(model_name="BestForecastModels", stage="Product
             run = client.get_run(run_id)
             model_type = run.data.tags.get("model_type", "unknown")
             
-            # If it's prophet but we can't use it, default to lightgbm
+            # Handle prophet model type gracefully
             if model_type == "prophet":
-                st.warning("⚠️ Prophet model detected but unavailable. Using fallback.")
+                st.warning("⚠️ Prophet model detected but unavailable. Using LightGBM as fallback.")
                 return "lightgbm"
                 
             return model_type
@@ -255,17 +251,14 @@ def recreate_model_registry():
                 # Construct artifact path
                 artifact_path = f"mlruns/{experiment.experiment_id}/{run_id}/artifacts"
                 
-                if model_type == "prophet":
-                    model_artifact_path = f"{artifact_path}/prophet_model"
-                    registered_name = "BestForecastModels"
-                elif model_type == "arima":
+                if model_type == "arima":
                     model_artifact_path = f"{artifact_path}/arima_model"
                     registered_name = "BestForecastModels"
                 elif model_type == "lightgbm":
                     model_artifact_path = f"{artifact_path}/lightgbm_model"
                     registered_name = "BestForecastModels"
                 else:
-                    st.warning(f"Unknown model type: {model_type}")
+                    st.warning(f"Skipping unknown model type: {model_type}")
                     continue
                 
                 # Check if artifact path exists
@@ -285,5 +278,4 @@ def recreate_model_registry():
                 st.error(f"Failed to re-register run {run.info.run_id}: {e}")
                 
     except Exception as e:
-
         st.error(f"Error recreating model registry: {e}")
