@@ -55,34 +55,34 @@ def setup_mlflow_utilities():
         from model_registry import check_registry_status
         check_registry_status()
     
-    col1, col2 = st.sidebar.columns(2)
+    # col1, col2 = st.sidebar.columns(2)
     
-    with col1:
-        if st.button("🛠️ Fix Paths", help="Check and fix MLflow model paths"):
-            try:
-                from model_registry import fix_mlflow_paths
-                fix_mlflow_paths()
-            except Exception as e:
-                st.sidebar.error(f"Error fixing paths: {e}")
+    # with col1:
+    #     if st.button("🛠️ Fix Paths", help="Check and fix MLflow model paths"):
+    #         try:
+    #             from model_registry import fix_mlflow_paths
+    #             fix_mlflow_paths()
+    #         except Exception as e:
+    #             st.sidebar.error(f"Error fixing paths: {e}")
     
-    with col2:
-        if st.button("🔄 Recreate Registry", help="Recreate model registry from existing runs"):
-            try:
-                from model_registry import recreate_model_registry
-                recreate_model_registry()
-            except Exception as e:
-                st.sidebar.error(f"Error recreating registry: {e}")
+    # with col2:
+    #     if st.button("🔄 Recreate Registry", help="Recreate model registry from existing runs"):
+    #         try:
+    #             from model_registry import recreate_model_registry
+    #             recreate_model_registry()
+    #         except Exception as e:
+    #             st.sidebar.error(f"Error recreating registry: {e}")
     
-    if st.sidebar.button("🗑️ Reset MLflow", type="secondary", help="Completely reset MLflow (requires retraining)"):
-        try:
-            from training import reset_mlflow_completely
-            reset_mlflow_completely()
-            st.sidebar.success("MLflow reset complete! Please refresh the page.")
-            st.rerun()
-        except Exception as e:
-            st.sidebar.error(f"Error resetting MLflow: {e}")
+    # if st.sidebar.button("🗑️ Reset MLflow", type="secondary", help="Completely reset MLflow (requires retraining)"):
+    #     try:
+    #         from training import reset_mlflow_completely
+    #         reset_mlflow_completely()
+    #         st.sidebar.success("MLflow reset complete! Please refresh the page.")
+    #         st.rerun()
+    #     except Exception as e:
+    #         st.sidebar.error(f"Error resetting MLflow: {e}")
     
-    st.sidebar.markdown("---")
+    # st.sidebar.markdown("---")
 
 def main():
     """Main application entry point"""
@@ -153,6 +153,7 @@ def main():
 
 if __name__ == '__main__':
     main()
+
 
 
 
