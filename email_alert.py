@@ -1,12 +1,10 @@
 # [file name]: email_alert.py
-# [file content begin]
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
-
 import os
 import re
-from dotenv import load_dotenv
+import streamlit as st
 
 # Remove relative import and use direct import instead
 try:
@@ -31,15 +29,23 @@ class EmailAlert:
     
 
     def __init__(self, env_path=".env"):
-        # load environment variables from .env file
-        load_dotenv(env_path)
-
-        self.__sender_email = os.getenv("SENDER_EMAIL")
-        self.__sender_password = os.getenv("SENDER_PASSWORD")
+        # Use Streamlit secrets for cloud deployment
+        try:
+            self.__sender_email = st.secrets.get("EMAIL", {}).get("SENDER_EMAIL", "")
+            self.__sender_password = st.secrets.get("EMAIL", {}).get("SENDER_PASSWORD", "")
+            
+            # Fallback to environment variables if secrets not available
+            if not self.__sender_email or not self.__sender_password:
+                self.__sender_email = os.getenv("SENDER_EMAIL")
+                self.__sender_password = os.getenv("SENDER_PASSWORD")
+        except Exception:
+            # If secrets are not configured, use environment variables
+            self.__sender_email = os.getenv("SENDER_EMAIL")
+            self.__sender_password = os.getenv("SENDER_PASSWORD")
 
         # sender's email and password validation
         if not self.__sender_email or not self.__sender_password:
-            raise ValueError("Sender email and password must be set in environment variables.")
+            raise ValueError("Sender email and password must be set in environment variables or Streamlit secrets.")
         if not isinstance(self.__sender_email, str) or not isinstance(self.__sender_password, str):
             raise ValueError("Sender email and password must be strings.")
         if len(self.__sender_email) == 0 or len(self.__sender_password) == 0:
@@ -51,12 +57,10 @@ class EmailAlert:
         self.__stmp_server = "smtp.gmail.com"
         self.__smtp_port = 587
 
-        # start connection to SMTP server
-        self.__server = smtplib.SMTP(self.__stmp_server, self.__smtp_port)
-        self.__server.starttls()                     # Secure connection
-        self.__server.login(self.__sender_email, self.__sender_password)
+        # Initialize server connection (will be established when needed)
+        self.__server = None
 
-        print("Email server connected successfully.")
+        print("EmailAlert initialized successfully.")
 
     # static method to get singleton instance
     @staticmethod
@@ -65,7 +69,22 @@ class EmailAlert:
             EmailAlert._instance = EmailAlert(env_path)
         return EmailAlert._instance
 
+    def _ensure_connection(self):
+        """Ensure SMTP connection is established"""
+        if self.__server is None:
+            try:
+                self.__server = smtplib.SMTP(self.__stmp_server, self.__smtp_port)
+                self.__server.starttls()  # Secure connection
+                self.__server.login(self.__sender_email, self.__sender_password)
+                print("Email server connected successfully.")
+            except Exception as e:
+                print(f"Failed to connect to email server: {e}")
+                raise
+
     def send_email(self, email_content_instance):
+        # Ensure connection is established
+        self._ensure_connection()
+        
         if not self.__server:
             raise ConnectionError("SMTP server is not connected.")
         
@@ -91,6 +110,20 @@ class EmailAlert:
         message["Subject"] = email_content_instance.subject
         message.attach(MIMEText(email_content_instance.html_content, "html"))
 
-        self.__server.sendmail(self.__sender_email, email_content_instance.recipient, message.as_string())
-        print(f"Email sent to {email_content_instance.recipient} successfully.")
-# [file content end]
+        try:
+            self.__server.sendmail(self.__sender_email, email_content_instance.recipient, message.as_string())
+            print(f"Email sent to {email_content_instance.recipient} successfully.")
+        except Exception as e:
+            print(f"Failed to send email: {e}")
+            # Re-establish connection on failure
+            self.__server = None
+            self._ensure_connection()
+            raise
+
+    def __del__(self):
+        """Clean up SMTP connection"""
+        if self.__server:
+            try:
+                self.__server.quit()
+            except:
+                pass
