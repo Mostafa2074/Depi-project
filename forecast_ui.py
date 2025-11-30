@@ -210,6 +210,9 @@ def display_mlflow_forecast_results(forecast_data, prophet_df, model_type, end_d
         st.error("No valid forecast data to display.")
         return
     
+    # Load historical data from Data.csv inside Data.zip
+    historical_data = load_historical_data()
+    
     # 1. Forecast Summary
     col1, col2, col3 = st.columns(3)
     with col1:
@@ -229,18 +232,18 @@ def display_mlflow_forecast_results(forecast_data, prophet_df, model_type, end_d
         display_df = display_df.rename(columns={'date': 'Date', 'prediction': 'Predicted Sales'})
         st.dataframe(display_df, use_container_width=True, height=300)
 
-    # 3. Interactive Chart - FIXED to show both historical AND forecast data
+    # 3. Interactive Chart - Using historical data from Data.csv
     st.subheader("📈 Forecast Visualization")
     
     fig = go.Figure()
 
-    # Actual Historical Data (if available)
-    if not prophet_df.empty:
+    # Actual Historical Data from Data.csv
+    if not historical_data.empty:
         fig.add_trace(go.Scatter(
-            x=prophet_df['ds'], 
-            y=prophet_df['y'],
+            x=historical_data['ds'], 
+            y=historical_data['y'],
             mode='lines+markers',
-            name='Historical Sales',
+            name='Historical Sales (Data.csv)',
             line=dict(color='#1f77b4', width=3),
             marker=dict(size=4, color='#1f77b4'),
             opacity=0.8
@@ -258,8 +261,8 @@ def display_mlflow_forecast_results(forecast_data, prophet_df, model_type, end_d
         ))
 
     # Add vertical line separating history and forecast
-    if not prophet_df.empty and not standardized_data.empty:
-        last_historical_date = prophet_df['ds'].max()
+    if not historical_data.empty and not standardized_data.empty:
+        last_historical_date = historical_data['ds'].max()
         first_forecast_date = standardized_data['date'].min()
 
         fig.add_shape(
@@ -296,11 +299,11 @@ def display_mlflow_forecast_results(forecast_data, prophet_df, model_type, end_d
     
     st.plotly_chart(fig, use_container_width=True)
 
-    # 4. Combined Data View (NEW - Show both historical and forecast together)
-    if not prophet_df.empty and not standardized_data.empty:
+    # 4. Combined Data View - Using historical data from Data.csv
+    if not historical_data.empty and not standardized_data.empty:
         with st.expander("🔍 Combined Historical + Forecast Data"):
             # Combine historical and forecast data
-            historical_display = prophet_df[['ds', 'y']].copy()
+            historical_display = historical_data[['ds', 'y']].copy()
             historical_display = historical_display.rename(columns={'ds': 'Date', 'y': 'Sales'})
             historical_display['Type'] = 'Historical'
             
@@ -349,3 +352,35 @@ def display_mlflow_forecast_results(forecast_data, prophet_df, model_type, end_d
             file_name=f"raw_forecast_{model_type}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
             mime="text/csv"
         )
+
+
+def load_historical_data():
+    """Load historical data from Data.csv inside Data.zip"""
+    try:
+        # Read the zip file and extract Data.csv
+        with zipfile.ZipFile('Data.zip', 'r') as zip_ref:
+            with zip_ref.open('Data.csv') as file:
+                historical_df = pd.read_csv(file)
+        
+        # Convert to the expected format (assuming columns are 'ds' and 'y')
+        if 'Date' in historical_df.columns and 'Sales' in historical_df.columns:
+            historical_df = historical_df.rename(columns={'Date': 'ds', 'Sales': 'y'})
+        
+        # Convert date column to datetime
+        historical_df['ds'] = pd.to_datetime(historical_df['ds'])
+        
+        # Sort by date
+        historical_df = historical_df.sort_values('ds')
+        
+        st.sidebar.info(f"📊 Loaded {len(historical_df)} historical records from Data.csv")
+        return historical_df
+        
+    except FileNotFoundError:
+        st.sidebar.warning("❌ Data.zip not found. Using provided prophet_df instead.")
+        return pd.DataFrame()  # Return empty DataFrame if file not found
+    except KeyError:
+        st.sidebar.warning("❌ Data.csv not found in Data.zip. Using provided prophet_df instead.")
+        return pd.DataFrame()  # Return empty DataFrame if file not found
+    except Exception as e:
+        st.sidebar.warning(f"❌ Error loading historical data: {e}. Using provided prophet_df instead.")
+        return pd.DataFrame()
