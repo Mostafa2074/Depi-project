@@ -4,7 +4,6 @@ import pandas as pd
 import pickle
 import os
 import shutil
-import zipfile
 import tempfile
 from prophet import Prophet
 from sklearn.metrics import mean_squared_error, mean_absolute_error
@@ -120,69 +119,47 @@ def setup_mlflow_training():
     # GET PATHS DYNAMICALLY
     paths = get_model_paths()
     
-    # Use Data.zip as primary data source
-    data_zip_path = paths['data_zip']
+    # Use model_dataset.csv for training
+    dataset_path = paths['dataset']
     models_folder = paths['models_folder']
     prophet_model_path = paths['prophet_model']
     arima_model_path = paths['arima_model']
     lgb_model_path = paths['lightgbm_model']
 
-    # 1️⃣ Load Dataset from Data.zip
-    st.subheader("1️⃣ Load Dataset from Data.zip")
+    # 1️⃣ Load Dataset from model_dataset.csv
+    st.subheader("1️⃣ Load Dataset for Training")
     
-    # Check if Data.zip exists
-    if not os.path.exists(data_zip_path):
-        st.error(f"❌ Data.zip not found at {data_zip_path}")
-        st.info("Please ensure Data.zip is in your project directory with the training data")
+    # Check if model_dataset.csv exists
+    if not os.path.exists(dataset_path):
+        st.error(f"❌ model_dataset.csv not found at {dataset_path}")
+        st.info("Please ensure model_dataset.csv is in your project directory for training")
         
         # Provide upload option
-        st.info("Upload your Data.zip file:")
-        uploaded_zip = st.file_uploader("Upload Data.zip", type="zip", key="training_data_uploader")
-        if uploaded_zip is not None:
-            # Save the uploaded file
-            with open(data_zip_path, "wb") as f:
-                f.write(uploaded_zip.getbuffer())
-            st.success("✅ Data.zip uploaded successfully! Please refresh the page.")
+        st.info("Upload your training dataset CSV file:")
+        uploaded_file = st.file_uploader("Upload model_dataset.csv", type="csv", key="training_data_uploader")
+        if uploaded_file is not None:
+            # Save the uploaded file as model_dataset.csv
+            with open(dataset_path, "wb") as f:
+                f.write(uploaded_file.getbuffer())
+            st.success("✅ Training dataset uploaded successfully! Please refresh the page.")
             return
         else:
             return
     
     try:
-        # Extract and load data from zip
-        with zipfile.ZipFile(data_zip_path, 'r') as zip_ref:
-            # List files in the zip
-            file_list = zip_ref.namelist()
-            st.info(f"Files in Data.zip: {', '.join(file_list)}")
-            
-            # Look for Data.csv (changed from train.csv)
-            data_file = None
-            for file in file_list:
-                if file.lower() == 'data.csv' or file.lower().endswith('/data.csv'):
-                    data_file = file
-                    break
-            
-            if not data_file:
-                st.error("❌ No Data.csv found in Data.zip")
-                st.info("Please ensure your Data.zip contains a Data.csv file")
-                return
-                
-            # Extract and read the Data.csv file
-            with zip_ref.open(data_file) as f:
-                df = pd.read_csv(f)
-            
-            st.success(f"✅ Successfully loaded data from {data_file} in Data.zip")
-            
-            # Try to parse date column if it exists
-            if 'date' in df.columns:
-                df['date'] = pd.to_datetime(df['date'])
-                st.info(f"📅 Data range: {df['date'].min().date()} to {df['date'].max().date()}")
+        # Load data from model_dataset.csv
+        df = pd.read_csv(dataset_path, parse_dates=["date"])
+        st.success(f"✅ Successfully loaded training data from model_dataset.csv")
+        
+        # Display data info
+        st.info(f"📅 Training data range: {df['date'].min().date()} to {df['date'].max().date()}")
         
     except Exception as e:
-        st.error(f"❌ Error loading data from Data.zip: {e}")
+        st.error(f"❌ Error loading training data from model_dataset.csv: {e}")
         return
 
     # Display dataset info
-    st.write("Dataset Preview:")
+    st.write("Training Dataset Preview:")
     st.dataframe(df.head())
     
     st.write("Dataset Info:")
@@ -199,12 +176,12 @@ def setup_mlflow_training():
     
     # Check required columns
     if 'sales' not in df.columns:
-        st.error("❌ 'sales' column not found in dataset")
+        st.error("❌ 'sales' column not found in training dataset")
         st.info("Available columns: " + ", ".join(df.columns))
         return
         
     if 'date' not in df.columns:
-        st.error("❌ 'date' column not found in dataset")
+        st.error("❌ 'date' column not found in training dataset")
         return
 
     # Prepare data for Prophet
@@ -388,6 +365,9 @@ def setup_mlflow_training():
                 st.info("Best Models experiment not created yet. Train models first.")
         except Exception as e:
             st.error(f"Error checking experiment status: {e}")
+
+# ... (rest of the training functions remain the same as previous version)
+# train_prophet_model, train_arima_model, train_lightgbm_model functions remain unchanged
 
 def train_prophet_model(prophet_param_grid, prophet_input_example, prophet_model_path, models_folder):
     """Train Prophet model with grid search"""
@@ -746,3 +726,4 @@ def train_lightgbm_model(lgb_param_grid, lgb_model_path, models_folder):
         st.info("Model saved locally and registered in MLflow. You can now use it in the Forecast Engine.")
     else:
         st.error("No valid LightGBM model was trained.")
+
