@@ -23,6 +23,10 @@ def load_production_model_from_registry(model_name="BestForecastModels", stage="
                 latest_version = max(model_versions, key=lambda x: int(x.version))
                 model_uri = f"models:/{model_name}/{latest_version.version}"
                 st.info(f"Using latest version {latest_version.version} (stage: {latest_version.current_stage})")
+                
+                # Load the model with robust error handling
+                model = load_model_robustly(model_uri, client, latest_version)
+                return model
             else:
                 st.error(f"No models found in registry for {model_name}")
                 return None
@@ -31,10 +35,10 @@ def load_production_model_from_registry(model_name="BestForecastModels", stage="
             latest_production = max(production_models, key=lambda x: int(x.version))
             model_uri = f"models:/{model_name}/{latest_production.version}"
             st.success(f"Loaded production model: {model_name} version {latest_production.version}")
-        
-        # Load the model with robust error handling
-        model = load_model_robustly(model_uri, client, latest_production)
-        return model
+            
+            # Load the model with robust error handling
+            model = load_model_robustly(model_uri, client, latest_production)
+            return model
         
     except Exception as e:
         st.error(f"Error loading model from registry: {e}")
@@ -191,6 +195,22 @@ def get_model_type_from_registry(model_name="BestForecastModels", stage="Product
                 return "lightgbm"
                 
             return model_type
+        else:
+            # If no staged models, check any available model
+            if model_versions:
+                latest_model = max(model_versions, key=lambda x: int(x.version))
+                run_id = latest_model.run_id
+                
+                # Get the run details to check model type
+                run = client.get_run(run_id)
+                model_type = run.data.tags.get("model_type", "unknown")
+                
+                if model_type == "prophet":
+                    st.warning("⚠️ Prophet model detected but unavailable. Using LightGBM as fallback.")
+                    return "lightgbm"
+                    
+                return model_type
+            
         return "unknown"
     except Exception as e:
         st.error(f"Error determining model type: {e}")
