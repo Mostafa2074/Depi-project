@@ -1,3 +1,4 @@
+# [file name]: model_registry.py
 import streamlit as st
 import mlflow
 import mlflow.pyfunc
@@ -23,10 +24,6 @@ def load_production_model_from_registry(model_name="BestForecastModels", stage="
                 latest_version = max(model_versions, key=lambda x: int(x.version))
                 model_uri = f"models:/{model_name}/{latest_version.version}"
                 st.info(f"Using latest version {latest_version.version} (stage: {latest_version.current_stage})")
-                
-                # Load the model with robust error handling
-                model = load_model_robustly(model_uri, client, latest_version)
-                return model
             else:
                 st.error(f"No models found in registry for {model_name}")
                 return None
@@ -35,10 +32,10 @@ def load_production_model_from_registry(model_name="BestForecastModels", stage="
             latest_production = max(production_models, key=lambda x: int(x.version))
             model_uri = f"models:/{model_name}/{latest_production.version}"
             st.success(f"Loaded production model: {model_name} version {latest_production.version}")
-            
-            # Load the model with robust error handling
-            model = load_model_robustly(model_uri, client, latest_production)
-            return model
+        
+        # Load the model with robust error handling
+        model = load_model_robustly(model_uri, client, latest_production)
+        return model
         
     except Exception as e:
         st.error(f"Error loading model from registry: {e}")
@@ -48,7 +45,6 @@ def load_model_robustly(model_uri, client, model_version):
     """Load MLflow model with multiple fallback strategies."""
     strategies = [
         try_direct_loading,
-        try_download_model,
         try_reconstruct_from_run
     ]
     
@@ -62,8 +58,10 @@ def load_model_robustly(model_uri, client, model_version):
             last_error = e
             continue
     
-    # If all strategies fail, raise the last error
-    raise last_error if last_error else Exception("All loading strategies failed")
+    # If all strategies fail, show informative message
+    st.error(f"All loading strategies failed. Please train models first.")
+    st.info("Go to 'MLflow Tracking' tab to train new models.")
+    return None
 
 def try_direct_loading(model_uri, client, model_version):
     """Strategy 1: Try direct loading."""
@@ -71,58 +69,6 @@ def try_direct_loading(model_uri, client, model_version):
         return mlflow.pyfunc.load_model(model_uri)
     except Exception as e:
         st.warning(f"Direct loading failed: {e}")
-        return None
-
-def try_download_model(model_uri, client, model_version):
-    """Strategy 2: Download model artifacts and load locally."""
-    try:
-        st.info("Attempting to download model artifacts...")
-        
-        # Create temporary directory for model download
-        with tempfile.TemporaryDirectory() as temp_dir:
-            # Download the model artifacts
-            try:
-                # Try to download using MLflow client
-                model_path = client.download_model_version(
-                    model_version.name, 
-                    model_version.version, 
-                    temp_dir
-                )
-                st.success(f"Model downloaded to: {model_path}")
-                return mlflow.pyfunc.load_model(model_path)
-            except Exception as e:
-                st.warning(f"MLflow download failed: {e}")
-                
-            # Alternative: Try to get the run and download artifacts
-            run_id = model_version.run_id
-            if run_id:
-                try:
-                    # Get all artifacts from the run
-                    artifacts = client.list_artifacts(run_id)
-                    for artifact in artifacts:
-                        if 'model' in artifact.path.lower() or 'artifacts' in artifact.path:
-                            artifact_path = client.download_artifacts(run_id, artifact.path, temp_dir)
-                            st.info(f"Downloaded artifact: {artifact.path}")
-                    
-                    # Try to load from the downloaded artifacts
-                    possible_paths = [
-                        os.path.join(temp_dir, "model"),
-                        os.path.join(temp_dir, "artifacts"),
-                        temp_dir
-                    ]
-                    
-                    for path in possible_paths:
-                        if os.path.exists(path):
-                            try:
-                                return mlflow.pyfunc.load_model(path)
-                            except Exception:
-                                continue
-                except Exception as e:
-                    st.warning(f"Artifact download failed: {e}")
-        
-        return None
-    except Exception as e:
-        st.warning(f"Download strategy failed: {e}")
         return None
 
 def try_reconstruct_from_run(model_uri, client, model_version):
@@ -149,7 +95,11 @@ def try_reconstruct_from_run(model_uri, client, model_version):
         
         # Add model-specific paths
         model_type = run.data.tags.get("model_type", "unknown")
-        if model_type == "arima":
+        if model_type == "prophet":
+            possible_paths.extend([
+                os.path.join(artifact_base, str(run.info.experiment_id), run_id, "artifacts", "prophet_model"),
+            ])
+        elif model_type == "arima":
             possible_paths.extend([
                 os.path.join(artifact_base, str(run.info.experiment_id), run_id, "artifacts", "arima_model"),
             ])
@@ -188,29 +138,7 @@ def get_model_type_from_registry(model_name="BestForecastModels", stage="Product
             # Get the run details to check model type
             run = client.get_run(run_id)
             model_type = run.data.tags.get("model_type", "unknown")
-            
-            # Handle prophet model type gracefully
-            if model_type == "prophet":
-                st.warning("⚠️ Prophet model detected but unavailable. Using LightGBM as fallback.")
-                return "lightgbm"
-                
             return model_type
-        else:
-            # If no staged models, check any available model
-            if model_versions:
-                latest_model = max(model_versions, key=lambda x: int(x.version))
-                run_id = latest_model.run_id
-                
-                # Get the run details to check model type
-                run = client.get_run(run_id)
-                model_type = run.data.tags.get("model_type", "unknown")
-                
-                if model_type == "prophet":
-                    st.warning("⚠️ Prophet model detected but unavailable. Using LightGBM as fallback.")
-                    return "lightgbm"
-                    
-                return model_type
-            
         return "unknown"
     except Exception as e:
         st.error(f"Error determining model type: {e}")
@@ -271,14 +199,17 @@ def recreate_model_registry():
                 # Construct artifact path
                 artifact_path = f"mlruns/{experiment.experiment_id}/{run_id}/artifacts"
                 
-                if model_type == "arima":
+                if model_type == "prophet":
+                    model_artifact_path = f"{artifact_path}/prophet_model"
+                    registered_name = "BestForecastModels"
+                elif model_type == "arima":
                     model_artifact_path = f"{artifact_path}/arima_model"
                     registered_name = "BestForecastModels"
                 elif model_type == "lightgbm":
                     model_artifact_path = f"{artifact_path}/lightgbm_model"
                     registered_name = "BestForecastModels"
                 else:
-                    st.warning(f"Skipping unknown model type: {model_type}")
+                    st.warning(f"Unknown model type: {model_type}")
                     continue
                 
                 # Check if artifact path exists
