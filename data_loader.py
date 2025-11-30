@@ -3,36 +3,74 @@ import streamlit as st
 import pandas as pd
 import zipfile
 import os
-from project_paths import get_model_paths
 import numpy as np
+from project_paths import get_model_paths
 
 @st.cache_data
 def load_data():
-    """Load and prepare data for the application"""
+    """Load and prepare data from Data.zip"""
     try:
         paths = get_model_paths()
+        data_zip_path = paths['data_zip']
         
-        # Try to load from model_dataset.csv first
-        if os.path.exists(paths['dataset']):
-            train = pd.read_csv(paths['dataset'], parse_dates=['date'])
-            st.success("Loaded data from model_dataset.csv")
+        # Check if Data.zip exists
+        if os.path.exists(data_zip_path):
+            st.success(f"Found Data.zip at {data_zip_path}")
+            
+            # Extract and load data from zip
+            with zipfile.ZipFile(data_zip_path, 'r') as zip_ref:
+                # List files in the zip
+                file_list = zip_ref.namelist()
+                st.info(f"Files in zip: {file_list}")
+                
+                # Look for train.csv or similar files
+                train_file = None
+                for file in file_list:
+                    if 'train' in file.lower() and file.endswith('.csv'):
+                        train_file = file
+                        break
+                
+                if train_file:
+                    # Extract and read the train file
+                    with zip_ref.open(train_file) as f:
+                        train = pd.read_csv(f)
+                    
+                    # Try to parse date column if it exists
+                    if 'date' in train.columns:
+                        train['date'] = pd.to_datetime(train['date'])
+                    
+                    st.success(f"✅ Successfully loaded data from {train_file} in Data.zip")
+                    
+                else:
+                    st.error("No train.csv file found in Data.zip")
+                    st.info("Available files: " + ", ".join(file_list))
+                    return pd.DataFrame(), None, None, pd.Series(), pd.DataFrame()
+                    
         else:
-            # Fallback: use sample data or file uploader
-            st.info("No dataset found. Please upload your dataset CSV file:")
+            st.warning(f"Data.zip not found at {data_zip_path}")
+            st.info("Please ensure Data.zip is in your project directory")
+            
+            # Fallback: try to load from uploaded file
+            st.info("Alternatively, upload your dataset CSV file:")
             uploaded_file = st.file_uploader("Choose a CSV file", type="csv", key="data_uploader")
             if uploaded_file is not None:
-                train = pd.read_csv(uploaded_file, parse_dates=['date'])
-                st.success("Dataset loaded successfully from uploaded file!")
+                train = pd.read_csv(uploaded_file)
+                # Try to parse date column if it exists
+                if 'date' in train.columns:
+                    train['date'] = pd.to_datetime(train['date'])
+                st.success("✅ Dataset loaded successfully from uploaded file!")
             else:
                 # Create sample data for demonstration
-                st.warning("Using sample data for demonstration. Please upload your own dataset for full functionality.")
-                dates = pd.date_range(start='2023-01-01', end='2023-12-31', freq='D')
+                st.warning("Using sample data for demonstration. Please upload Data.zip or a CSV file for full functionality.")
+                dates = pd.date_range(start='2013-01-01', end='2017-08-15', freq='D')
                 sample_data = {
                     'date': dates,
                     'sales': 1000 + np.random.normal(0, 100, len(dates)).cumsum(),
-                    'state': ['CA'] * len(dates),
-                    'city': ['San Francisco'] * len(dates),
-                    'store_nbr': [1] * len(dates)
+                    'state': ['State_A'] * len(dates),
+                    'city': ['City_A'] * len(dates),
+                    'store_nbr': [1] * len(dates),
+                    'family': ['PRODUCT_FAMILY'] * len(dates),
+                    'onpromotion': [0] * len(dates)
                 }
                 train = pd.DataFrame(sample_data)
                 st.info("Sample data generated for demonstration")
@@ -40,8 +78,9 @@ def load_data():
         # Basic data preparation
         if 'date' in train.columns:
             train = train.sort_values('date')
-            min_date = train['date'].min()
-            max_date = train['date'].max()
+            train = train.set_index('date')  # Set date as index for time series
+            min_date = train.index.min()
+            max_date = train.index.max()
         else:
             min_date = max_date = None
             
@@ -52,8 +91,9 @@ def load_data():
             sort_state = pd.Series()
             
         # Prepare Prophet format data
-        if 'sales' in train.columns and 'date' in train.columns:
-            prophet_df = train.rename(columns={'date': 'ds', 'sales': 'y'})[['ds', 'y']]
+        if 'sales' in train.columns:
+            # Reset index to get date as column
+            prophet_df = train.reset_index()[['date', 'sales']].rename(columns={'date': 'ds', 'sales': 'y'})
         else:
             prophet_df = pd.DataFrame()
         
@@ -61,6 +101,7 @@ def load_data():
         
     except Exception as e:
         st.error(f"Error loading data: {e}")
+        import traceback
+        st.error(f"Detailed error: {traceback.format_exc()}")
         # Return empty dataframes to prevent crashes
         return pd.DataFrame(), None, None, pd.Series(), pd.DataFrame()
-
