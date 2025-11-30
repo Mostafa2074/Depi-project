@@ -80,6 +80,8 @@ def setup_mlflow_training():
     st.subheader("🏷️ Model Registry")
     display_model_registry()
 
+# In training.py, update the train_model function:
+
 def train_model(model_type, test_size, cv_folds):
     """Train a model and log to MLflow"""
     try:
@@ -111,6 +113,47 @@ def train_model(model_type, test_size, cv_folds):
             # Simulate training (replace with actual model training)
             st.info(f"🤖 Training {model_type} model...")
             
+            # Create appropriate model based on type
+            if model_type.lower() == "lightgbm":
+                import lightgbm as lgb
+                from model_wrappers import LightGBMModelWrapper
+                
+                # Create a simple LightGBM model
+                model = lgb.LGBMRegressor()
+                # Here you would normally train the model with your data
+                # For demo, we'll use a dummy model
+                wrapper = LightGBMModelWrapper(model)
+                mlflow.pyfunc.log_model(
+                    "model",
+                    python_model=wrapper,
+                    registered_model_name="BestForecastModels"
+                )
+                
+            elif model_type.lower() == "prophet":
+                from model_wrappers import ProphetModelWrapper
+                from prophet import Prophet
+                
+                # Create Prophet model
+                model = Prophet()
+                wrapper = ProphetModelWrapper(model)
+                mlflow.pyfunc.log_model(
+                    "model",
+                    python_model=wrapper,
+                    registered_model_name="BestForecastModels"
+                )
+                
+            else:  # ARIMA
+                from model_wrappers import ARIMAModelWrapper
+                from statsmodels.tsa.arima.model import ARIMA
+                
+                # Create ARIMA model (dummy for demo)
+                wrapper = ARIMAModelWrapper(None)
+                mlflow.pyfunc.log_model(
+                    "model",
+                    python_model=wrapper,
+                    registered_model_name="BestForecastModels"
+                )
+            
             # Simulate metrics based on model type
             if model_type.lower() == "prophet":
                 metrics = {
@@ -136,20 +179,6 @@ def train_model(model_type, test_size, cv_folds):
             
             # Log metrics
             mlflow.log_metrics(metrics)
-            
-            # Log model
-            if model_type.lower() == "prophet":
-                mlflow.pyfunc.log_model(
-                    "model",
-                    python_model=create_dummy_model(),
-                    registered_model_name="BestForecastModels"
-                )
-            else:
-                mlflow.sklearn.log_model(
-                    create_dummy_model(),
-                    "model",
-                    registered_model_name="BestForecastModels"
-                )
             
             # Set tags
             mlflow.set_tags({
@@ -178,6 +207,8 @@ def train_model(model_type, test_size, cv_folds):
             
     except Exception as e:
         st.error(f"❌ Training failed: {e}")
+        import traceback
+        st.error(f"Detailed error: {traceback.format_exc()}")
         return False
 
 def create_dummy_model():
@@ -318,3 +349,4 @@ def reset_mlflow_completely():
         
     except Exception as e:
         st.error(f"❌ Error resetting MLflow: {e}")
+
