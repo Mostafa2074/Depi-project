@@ -20,6 +20,7 @@ def setup_mlflow_training():
     - Models are saved only for this browser session
     - Perfect for testing and demonstrations
     - Automatically cleared when you leave
+    - After training, models are automatically registered for use in Forecast Engine
     """)
     
     # Initialize MLflow client
@@ -31,10 +32,10 @@ def setup_mlflow_training():
     
     st.sidebar.header("Training Configuration")
     
-    # Model selection - REMOVE PROPHET
+    # Model selection - Only LightGBM and ARIMA
     model_choice = st.sidebar.selectbox(
         "Select Model to Train",
-        ["LightGBM", "ARIMA"]  # Only these two options
+        ["LightGBM", "ARIMA"]
     )
     
     # Data loading
@@ -49,10 +50,25 @@ def setup_mlflow_training():
     st.sidebar.write(f"Data range: {prophet_df['ds'].min().date()} to {prophet_df['ds'].max().date()}")
     st.sidebar.write(f"Total records: {len(prophet_df)}")
     
+    # Show model descriptions
+    with st.expander("📋 Model Descriptions"):
+        st.write("""
+        **LightGBM**: 
+        - Gradient boosting framework
+        - Fast training and high accuracy
+        - Handles large datasets efficiently
+        - Recommended for most use cases
+        
+        **ARIMA**:
+        - Classical time series model
+        - Good for data with clear trends/seasonality
+        - Interpretable parameters
+        """)
+    
     # Session management
     add_session_cleanup()
     
-    if st.sidebar.button("🚀 Train Selected Model"):
+    if st.sidebar.button("🚀 Train Selected Model", type="primary"):
         with st.spinner(f"Training {model_choice} model..."):
             try:
                 if model_choice == "ARIMA":
@@ -61,10 +77,13 @@ def setup_mlflow_training():
                     train_lightgbm(prophet_df, client)
                 
                 st.success(f"✅ {model_choice} training completed!")
+                st.success("🎯 Model automatically registered for use in Forecast Engine!")
                 st.balloons()
                 
             except Exception as e:
                 st.error(f"❌ Training failed: {e}")
+
+# ... (keep the rest of training.py functions the same as before)
 
 def train_prophet(prophet_df, client):
     """Prophet training disabled due to dependency issues"""
@@ -237,3 +256,4 @@ def reset_mlflow_completely():
     except Exception as e:
         st.error(f"Error resetting MLflow: {e}")
         return False
+
