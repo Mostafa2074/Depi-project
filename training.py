@@ -16,6 +16,7 @@ from itertools import product
 import numpy as np
 from project_paths import get_model_paths
 from mlflow.tracking import MlflowClient
+from prophet import Prophet
 
 # Import wrapper classes (defined inline to avoid import issues)
 import mlflow.pyfunc
@@ -390,10 +391,99 @@ def setup_mlflow_training():
 # ... (rest of the training functions remain the same as previous version)
 # train_prophet_model, train_arima_model, train_lightgbm_model functions remain unchanged
 
+# In training.py, update the train_prophet_model function:
+
 def train_prophet_model(prophet_param_grid, prophet_input_example, prophet_model_path, models_folder):
     """Train Prophet model with grid search"""
-    # ... existing code ...
+    if 'mlflow_prophet_train_df' not in st.session_state:
+        st.error("Please load dataset first")
+        return
+        
+    st.write("Starting Prophet Grid Search...")
     
+    # Initialize variables
+    best_prophet_rmse = float("inf")
+    best_prophet_mae = float("inf")
+    best_prophet_params = None
+    best_prophet_model = None  # Initialize here
+
+    progress_text = st.empty()
+    progress_bar = st.progress(0)
+
+    # Generate all parameter combinations
+    param_combinations = []
+    for changepoint_prior_scale in prophet_param_grid["changepoint_prior_scale"]:
+        for seasonality_prior_scale in prophet_param_grid["seasonality_prior_scale"]:
+            for holidays_prior_scale in prophet_param_grid["holidays_prior_scale"]:
+                for seasonality_mode in prophet_param_grid["seasonality_mode"]:
+                    for yearly_seasonality in prophet_param_grid["yearly_seasonality"]:
+                        for weekly_seasonality in prophet_param_grid["weekly_seasonality"]:
+                            param_combinations.append({
+                                "changepoint_prior_scale": changepoint_prior_scale,
+                                "seasonality_prior_scale": seasonality_prior_scale,
+                                "holidays_prior_scale": holidays_prior_scale,
+                                "seasonality_mode": seasonality_mode,
+                                "yearly_seasonality": yearly_seasonality,
+                                "weekly_seasonality": weekly_seasonality
+                            })
+
+    total_runs = len(param_combinations)
+    run_count = 0
+
+    # Setup experiment
+    setup_mlflow_experiment("prophet_test")
+
+    for params in param_combinations:
+        run_name = f"Prophet_{params['changepoint_prior_scale']}_{params['seasonality_prior_scale']}"
+        try:
+            with mlflow.start_run(run_name=run_name):
+                mlflow.log_params(params)
+
+                # Initialize and fit Prophet model
+                model = Prophet(
+                    changepoint_prior_scale=params["changepoint_prior_scale"],
+                    seasonality_prior_scale=params["seasonality_prior_scale"],
+                    holidays_prior_scale=params["holidays_prior_scale"],
+                    seasonality_mode=params["seasonality_mode"],
+                    yearly_seasonality=params["yearly_seasonality"],
+                    weekly_seasonality=params["weekly_seasonality"]
+                )
+                
+                model_fit = model.fit(st.session_state.mlflow_prophet_train_df)
+
+                # Make predictions
+                train_forecast = model_fit.predict(st.session_state.mlflow_prophet_train_df[['ds']])
+                test_forecast = model_fit.predict(st.session_state.mlflow_prophet_test_df[['ds']])
+
+                # Calculate metrics
+                train_rmse = mean_squared_error(st.session_state.mlflow_prophet_train_df['y'], train_forecast['yhat']) ** 0.5
+                train_mae = mean_absolute_error(st.session_state.mlflow_prophet_train_df['y'], train_forecast['yhat'])
+                test_rmse = mean_squared_error(st.session_state.mlflow_prophet_test_df['y'], test_forecast['yhat']) ** 0.5
+                test_mae = mean_absolute_error(st.session_state.mlflow_prophet_test_df['y'], test_forecast['yhat'])
+
+                mlflow.log_metric("train_rmse", train_rmse)
+                mlflow.log_metric("train_mae", train_mae)
+                mlflow.log_metric("test_rmse", test_rmse)
+                mlflow.log_metric("test_mae", test_mae)
+
+                # Update best model
+                if test_rmse < best_prophet_rmse:
+                    best_prophet_rmse = test_rmse
+                    best_prophet_mae = test_mae
+                    best_prophet_params = params
+                    best_prophet_model = model_fit
+
+                run_count += 1
+                progress_text.text(f"Prophet Run {run_count}/{total_runs} — MAE={test_mae:.2f}, RMSE={test_rmse:.2f}")
+                progress_bar.progress(run_count / total_runs)
+
+        except Exception as e:
+            st.warning(f"Prophet Run {run_name} failed: {e}")
+            continue
+
+    st.success(f"Prophet Grid search complete. Best RMSE={best_prophet_rmse:.2f}, Best MAE={best_prophet_mae:.2f}")
+    st.write("Best Prophet Parameters:", best_prophet_params)
+
     # Save and register best Prophet model
     if best_prophet_model is not None:
         # Ensure models folder exists
@@ -423,7 +513,7 @@ def train_prophet_model(prophet_param_grid, prophet_input_example, prophet_model
             mlflow.pyfunc.log_model(
                 python_model=wrapper_model,
                 artifact_path="prophet_model",
-                registered_model_name=PROPHET_REGISTRY_NAME,  # This should be "BestForecastModels"
+                registered_model_name=PROPHET_REGISTRY_NAME,
                 input_example=prophet_input_example,
                 signature=signature
             )
@@ -435,6 +525,8 @@ def train_prophet_model(prophet_param_grid, prophet_input_example, prophet_model
         load_production_model_from_registry.clear()
         
         st.info("🔄 Model registered successfully! You can now use it in the Forecast Engine.")
+    else:
+        st.error("No valid Prophet model was trained during grid search.")
 
 def train_arima_model(arima_param_grid, arima_input_example, arima_model_path, models_folder):
     """Train ARIMA model with grid search"""
@@ -667,6 +759,7 @@ def train_lightgbm_model(lgb_param_grid, lgb_model_path, models_folder):
         st.info("Model saved locally and registered in MLflow. You can now use it in the Forecast Engine.")
     else:
         st.error("No valid LightGBM model was trained.")
+
 
 
 
