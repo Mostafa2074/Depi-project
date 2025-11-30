@@ -82,8 +82,12 @@ def main():
         if k not in st.session_state:
             st.session_state[k] = v
 
-    # Load resources
-    train, min_date, max_date, sort_state, prophet_df = load_data()
+    # Load resources with error handling
+    try:
+        train, min_date, max_date, sort_state, prophet_df = load_data()
+    except Exception as e:
+        st.error(f"Error loading data: {e}")
+        train, min_date, max_date, sort_state, prophet_df = pd.DataFrame(), None, None, pd.Series(), pd.DataFrame()
     
     # Load production model from MLflow Registry
     model = load_production_model_from_registry()
