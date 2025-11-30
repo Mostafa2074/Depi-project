@@ -124,5 +124,25 @@ def main():
         f"- Production Model: `{model_type if model else 'None'}`"
     )
 
+# Optional: Add to main.py for initial setup
+def check_data_files():
+    """Check if required data files exist"""
+    paths = get_model_paths()
+    
+    if not os.path.exists(paths['data_zip']):
+        st.sidebar.warning("⚠️ Data.zip not found")
+        
+        with st.sidebar.expander("📁 Upload Data.zip"):
+            st.info("Please upload your Data.zip file containing the training data")
+            uploaded_zip = st.file_uploader("Upload Data.zip", type="zip", key="data_zip_uploader")
+            
+            if uploaded_zip is not None:
+                # Save the uploaded file
+                with open(paths['data_zip'], "wb") as f:
+                    f.write(uploaded_zip.getbuffer())
+                st.success("✅ Data.zip uploaded successfully!")
+                st.rerun()
+
 if __name__ == '__main__':
     main()
+
