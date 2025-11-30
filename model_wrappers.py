@@ -10,20 +10,10 @@ class ARIMAModelWrapper(mlflow.pyfunc.PythonModel):
     def predict(self, context, model_input):
         """
         ARIMA prediction that handles different input formats.
-        The input should be a DataFrame with date information or just periods.
         """
         try:
-            # Convert input types to match expected schema if needed
-            if 'year' in model_input.columns:
-                model_input = model_input.copy()
-                model_input['year'] = model_input['year'].astype('int32')
-                model_input['month'] = model_input['month'].astype('int32')
-                model_input['day'] = model_input['day'].astype('int32')
-            
             # Handle different input formats
             if 'ds' in model_input.columns:
-                periods = len(model_input)
-            elif 'dummy' in model_input.columns:
                 periods = len(model_input)
             else:
                 periods = len(model_input)
@@ -41,7 +31,6 @@ class ARIMAModelWrapper(mlflow.pyfunc.PythonModel):
             # Fallback: return predictions as DataFrame
             import traceback
             print(f"ARIMA prediction error: {e}")
-            print(traceback.format_exc())
             return pd.DataFrame({'prediction': [0] * len(model_input)})
 
 class ProphetModelWrapper(mlflow.pyfunc.PythonModel):
@@ -51,12 +40,22 @@ class ProphetModelWrapper(mlflow.pyfunc.PythonModel):
     def predict(self, context, model_input):
         """
         Generates forecast using the Prophet model.
+        Expects input with 'ds' column containing dates.
         """
-        # Call the actual Prophet model predict method
-        full_forecast = self.model.predict(model_input)
-        
-        # Return both 'ds' and 'yhat' columns
-        return full_forecast[['ds', 'yhat']]
+        try:
+            # Ensure we have the required 'ds' column
+            if 'ds' not in model_input.columns:
+                raise ValueError("Prophet model requires 'ds' column with dates")
+            
+            # Call the actual Prophet model predict method
+            full_forecast = self.model.predict(model_input)
+            
+            # Return both 'ds' and 'yhat' columns
+            return full_forecast[['ds', 'yhat']]
+        except Exception as e:
+            print(f"Prophet prediction error: {e}")
+            # Return empty dataframe with expected columns
+            return pd.DataFrame({'ds': model_input['ds'], 'yhat': [0] * len(model_input)})
 
 class LightGBMModelWrapper(mlflow.pyfunc.PythonModel):
     def __init__(self, model, feature_columns=None):
@@ -93,7 +92,5 @@ class LightGBMModelWrapper(mlflow.pyfunc.PythonModel):
             return pd.DataFrame({'prediction': predictions})
             
         except Exception as e:
-            import traceback
             print(f"LightGBM prediction error: {e}")
-            print(traceback.format_exc())
             return pd.DataFrame({'prediction': [0] * len(model_input)})
