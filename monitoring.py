@@ -266,7 +266,7 @@ def search_prediction_logs_experiment():
             for run in runs:
                 result = extract_predictions_from_mlflow_run(run)
                 if result is not None and not result.empty:
-                    st.info(f"📁 Using predictions from prediction_logs run: {run.info.run_name}")
+                    # st.info(f"📁 Using predictions from prediction_logs run: {run.info.run_name}")
                     return result
         
         return None
@@ -1009,5 +1009,6 @@ def display_comparison_analysis(comparison_df, pred_df, email_enabled=False, rec
                 file_name=f"raw_monitoring_data_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
                 mime="text/csv",
             )
+
 
 
