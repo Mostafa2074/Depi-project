@@ -1,766 +1,1028 @@
-# [file name]: training.py
+# [file name]: monitoring.py
 import streamlit as st
 import pandas as pd
-import pickle
-import os
-import shutil
-import tempfile
-from prophet import Prophet
-from sklearn.metrics import mean_squared_error, mean_absolute_error
-from sklearn.model_selection import train_test_split, RandomizedSearchCV
+import plotly.express as px
+import plotly.graph_objects as go
+from datetime import datetime, timedelta
 import mlflow
-from mlflow.models.signature import infer_signature
-import lightgbm as lgb
-from statsmodels.tsa.arima.model import ARIMA
-from itertools import product
-import numpy as np
-from project_paths import get_model_paths
 from mlflow.tracking import MlflowClient
-from prophet import Prophet
+import os
+import tempfile
+import numpy as np
+import time
+import sys
+from project_paths import get_model_paths
 
-# Import wrapper classes (defined inline to avoid import issues)
-import mlflow.pyfunc
+# Email configuration - CONSTANT EMAIL
+CONSTANT_RECIPIENT_EMAIL = "mostafanad2004@gmail.com"
 
-class ProphetModelWrapper(mlflow.pyfunc.PythonModel):
-    def __init__(self, model):
-        self.model = model
-        
-    def predict(self, context, model_input):
-        full_forecast = self.model.predict(model_input)
-        return full_forecast[['ds', 'yhat']]
+# Robust email alert imports with multiple fallbacks
+EMAIL_ALERTS_AVAILABLE = False
+EmailAlert = None
+EmailContent = None
 
-class ARIMAModelWrapper(mlflow.pyfunc.PythonModel):
-    def __init__(self, model):
-        self.model = model
-        
-    def predict(self, context, model_input):
-        try:
-            periods = len(model_input)
-            predictions = self.model.predict(start=0, end=periods-1)
-            if isinstance(predictions, pd.Series):
-                return pd.DataFrame({'prediction': predictions.values})
-            else:
-                return pd.DataFrame({'prediction': predictions})
-        except Exception:
-            return pd.DataFrame({'prediction': [0] * len(model_input)})
-
-class LightGBMModelWrapper(mlflow.pyfunc.PythonModel):
-    def __init__(self, model, feature_columns=None):
-        self.model = model
-        self.feature_columns = feature_columns or ['year', 'month', 'day', 'dayofweek', 'quarter', 'dayofyear', 'weekofyear']
-        
-    def predict(self, context, model_input):
-        try:
-            if 'ds' in model_input.columns:
-                dates = pd.to_datetime(model_input['ds'])
-                features_df = pd.DataFrame({
-                    'year': dates.dt.year.astype('float64'),
-                    'month': dates.dt.month.astype('float64'),
-                    'day': dates.dt.day.astype('float64'),
-                    'dayofweek': dates.dt.dayofweek.astype('float64'),
-                    'quarter': dates.dt.quarter.astype('float64'),
-                    'dayofyear': dates.dt.dayofyear.astype('float64'),
-                    'weekofyear': dates.dt.isocalendar().week.astype('float64')
-                })
-            else:
-                features_df = model_input[self.feature_columns].copy()
-                for col in features_df.columns:
-                    features_df[col] = features_df[col].astype('float64')
-            
-            predictions = self.model.predict(features_df)
-            return pd.DataFrame({'prediction': predictions})
-        except Exception:
-            return pd.DataFrame({'prediction': [0] * len(model_input)})
-
-# Constants
-PROPHET_REGISTRY_NAME = "BestForecastModels"
-ARIMA_REGISTRY_NAME = "BestForecastModels"
-LIGHTGBM_REGISTRY_NAME = "BestForecastModels"
-BEST_MODELS_EXPERIMENT = "best_models"
-
-def setup_mlflow_experiment(experiment_name):
-    """Setup MLflow experiment with proper relative paths and error handling"""
-    # Ensure experiment exists with file store
+try:
+    # Try direct import first
+    from email_alert import EmailAlert
+    from email_content import EmailContent
+    EMAIL_ALERTS_AVAILABLE = True
+    print("✅ Email alert modules loaded successfully")
+except ImportError as e:
+    print(f"❌ Direct import failed: {e}")
     try:
-        # First try to get existing experiment
-        experiment = mlflow.get_experiment_by_name(experiment_name)
-        if experiment is None:
-            # Create experiment with file store
-            experiment_id = mlflow.create_experiment(
-                experiment_name, 
-                artifact_location="file:./mlruns"
-            )
-            st.info(f"Created new experiment: {experiment_name}")
-        else:
-            experiment_id = experiment.experiment_id
+        # Try relative import
+        from .email_alert import EmailAlert
+        from .email_content import EmailContent
+        EMAIL_ALERTS_AVAILABLE = True
+        print("✅ Email alert modules loaded via relative import")
+    except ImportError as e2:
+        print(f"❌ Relative import also failed: {e2}")
+        st.warning("Email alert system not available. Proceeding without email notifications.")
+
+def run_monitoring_app():
+    st.title("📊 Prediction Monitoring Dashboard")
+    
+    # Email configuration section - USING CONSTANT EMAIL
+    if EMAIL_ALERTS_AVAILABLE:
+        with st.expander("📧 Email Alert Configuration", expanded=False):
+            st.info("Configure email alerts for high prediction errors")
             
-        mlflow.set_experiment(experiment_name)
-        return experiment_id
-        
-    except Exception as e:
-        st.error(f"Error setting up experiment {experiment_name}: {e}")
-        # Fallback: use default experiment
-        mlflow.set_experiment("Default")
-        return "0"
-
-def reset_mlflow_completely():
-    """Completely reset MLflow database and artifacts."""
-    try:
-        # Delete MLflow database
-        if os.path.exists("mlflow.db"):
-            os.remove("mlflow.db")
-            st.success("Deleted mlflow.db")
-        
-        # Delete MLflow runs
-        if os.path.exists("mlruns"):
-            shutil.rmtree("mlruns")
-            st.success("Deleted mlruns folder")
-        
-        # Reinitialize MLflow
-        mlflow.set_tracking_uri("sqlite:///mlflow.db")
-        st.success("MLflow reset complete. You need to retrain models.")
-        
-    except Exception as e:
-        st.error(f"Error resetting MLflow: {e}")
-
-# In training.py, update the MLflow setup:
-
-def setup_mlflow_training():
-    """Main MLflow training interface"""
-    st.title("📊 Multi-Model Forecast Trainer with MLflow & Model Registry")
-    
-    # Configure MLflow for file store (Streamlit Cloud compatible)
-    os.environ['MLFLOW_ARTIFACT_ROOT'] = './mlruns'
-    mlflow.set_tracking_uri("./mlruns")  # Use file store
-    
-    # Ensure mlruns directory exists
-    os.makedirs("./mlruns", exist_ok=True)
-    
-    # GET PATHS DYNAMICALLY
-    paths = get_model_paths()
-    
-    # Use model_dataset.csv for training
-    dataset_path = paths['dataset']
-    models_folder = paths['models_folder']
-    prophet_model_path = paths['prophet_model']
-    arima_model_path = paths['arima_model']
-    lgb_model_path = paths['lightgbm_model']
-
-    # Rest of the function remains the same...
-
-    # 1️⃣ Load Dataset from model_dataset.csv
-    st.subheader("1️⃣ Load Dataset for Training")
-    
-    # Check if model_dataset.csv exists
-    if not os.path.exists(dataset_path):
-        st.error(f"❌ model_dataset.csv not found at {dataset_path}")
-        st.info("Please ensure model_dataset.csv is in your project directory for training")
-        
-        # Provide upload option
-        st.info("Upload your training dataset CSV file:")
-        uploaded_file = st.file_uploader("Upload model_dataset.csv", type="csv", key="training_data_uploader")
-        if uploaded_file is not None:
-            # Save the uploaded file as model_dataset.csv
-            with open(dataset_path, "wb") as f:
-                f.write(uploaded_file.getbuffer())
-            st.success("✅ Training dataset uploaded successfully! Please refresh the page.")
-            return
-        else:
-            return
-    
-    try:
-        # Load data from model_dataset.csv
-        df = pd.read_csv(dataset_path, parse_dates=["date"])
-        st.success(f"✅ Successfully loaded training data from model_dataset.csv")
-        
-        # Display data info
-        st.info(f"📅 Training data range: {df['date'].min().date()} to {df['date'].max().date()}")
-        
-    except Exception as e:
-        st.error(f"❌ Error loading training data from model_dataset.csv: {e}")
-        return
-
-    # Display dataset info
-    st.write("Training Dataset Preview:")
-    st.dataframe(df.head())
-    
-    st.write("Dataset Info:")
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        st.metric("Total Records", f"{len(df):,}")
-    with col2:
-        st.metric("Columns", len(df.columns))
-    with col3:
-        if 'date' in df.columns:
-            st.metric("Date Range", f"{df['date'].min().date()} to {df['date'].max().date()}")
-        else:
-            st.metric("Date Column", "Not Found")
-    
-    # Check required columns
-    if 'sales' not in df.columns:
-        st.error("❌ 'sales' column not found in training dataset")
-        st.info("Available columns: " + ", ".join(df.columns))
-        return
-        
-    if 'date' not in df.columns:
-        st.error("❌ 'date' column not found in training dataset")
-        return
-
-    # Prepare data for Prophet
-    prophet_df = df.rename(columns={"date": "ds", "sales": "y"})[['ds', 'y']]
-    prophet_input_example = prophet_df[['ds']].head(5)
-    
-    # Prepare data for ARIMA
-    series = df.set_index("date")["sales"].sort_index()
-    arima_input_example = pd.DataFrame({
-        'ds': series.head(10).index,
-        'year': series.head(10).index.year.astype('int32'),
-        'month': series.head(10).index.month.astype('int32'),
-        'day': series.head(10).index.day.astype('int32')
-    })
-    
-    # Feature Engineering for LightGBM
-    df_features = df.copy()
-    df_features['year'] = df_features['date'].dt.year.astype('float64')
-    df_features['month'] = df_features['date'].dt.month.astype('float64')
-    df_features['day'] = df_features['date'].dt.day.astype('float64')
-    df_features['dayofweek'] = df_features['date'].dt.dayofweek.astype('float64')
-    df_features['quarter'] = df_features['date'].dt.quarter.astype('float64')
-    df_features['dayofyear'] = df_features['date'].dt.dayofyear.astype('float64')
-    df_features['weekofyear'] = df_features['date'].dt.isocalendar().week.astype('float64')
-    
-    # Prepare features and target for LightGBM
-    feature_columns = ['year', 'month', 'day', 'dayofweek', 'quarter', 'dayofyear', 'weekofyear']
-    X = df_features[feature_columns]
-    y = df_features['sales']
-
-    # Train/Test Split for Prophet
-    prophet_train_df, prophet_test_df = train_test_split(prophet_df, test_size=0.2, shuffle=False)
-    
-    # Train/Test Split for ARIMA
-    train_size = int(len(series) * 0.8)
-    arima_train_series = series[:train_size]
-    arima_test_series = series[train_size:]
-    
-    # Train/Test Split for LightGBM
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, shuffle=False)
-    
-    st.write(f"Training rows: {len(prophet_train_df)}, Testing rows: {len(prophet_test_df)}")
-    
-    # Store variables in session state
-    st.session_state.mlflow_df = df
-    st.session_state.mlflow_prophet_df = prophet_df
-    st.session_state.mlflow_prophet_train_df = prophet_train_df
-    st.session_state.mlflow_prophet_test_df = prophet_test_df
-    st.session_state.mlflow_series = series
-    st.session_state.mlflow_arima_train_series = arima_train_series
-    st.session_state.mlflow_arima_test_series = arima_test_series
-    st.session_state.mlflow_X = X
-    st.session_state.mlflow_y = y
-    st.session_state.mlflow_X_train = X_train
-    st.session_state.mlflow_X_test = X_test
-    st.session_state.mlflow_y_train = y_train
-    st.session_state.mlflow_y_test = y_test
-
-    # 2️⃣ Load Pre-trained Models (Optional)
-    st.subheader("2️⃣ Load Pre-trained Models (Optional)")
-    col1, col2, col3 = st.columns(3)
-
-    with col1:
-        prophet_pre_trained = None
-        if os.path.exists(prophet_model_path):
-            with open(prophet_model_path, "rb") as f:
-                prophet_pre_trained = pickle.load(f)
-            st.success("Pre-trained Prophet model loaded")
-        else:
-            st.info("No Prophet model found")
-
-    with col2:
-        arima_pre_trained = None
-        if os.path.exists(arima_model_path):
-            with open(arima_model_path, "rb") as f:
-                arima_pre_trained = pickle.load(f)
-            st.success("Pre-trained ARIMA model loaded")
-        else:
-            st.info("No ARIMA model found")
-
-    with col3:
-        lgb_pre_trained = None
-        if os.path.exists(lgb_model_path):
-            with open(lgb_model_path, "rb") as f:
-                lgb_pre_trained = pickle.load(f)
-            st.success("Pre-trained LightGBM model loaded")
-        else:
-            st.info("No LightGBM model found")
-
-    # 3️⃣ Prophet Model Training
-    st.subheader("3️⃣ Prophet Model Training")
-    prophet_param_grid = {
-        "changepoint_prior_scale": [0.001, 0.01, 0.1],
-        "seasonality_prior_scale": [0.01, 0.1, 1.0],
-        "holidays_prior_scale": [0.01, 0.1, 1.0],
-        "seasonality_mode": ["additive", "multiplicative"],
-        "yearly_seasonality": [True, False],
-        "weekly_seasonality": [True, False]
-    }
-
-    if st.button("🚀 Train Prophet Model", key="train_prophet"):
-        with st.spinner("Training Prophet model..."):
-            train_prophet_model(prophet_param_grid, prophet_input_example, prophet_model_path, models_folder)
-
-    # 4️⃣ ARIMA Model Training
-    st.subheader("4️⃣ ARIMA Model Training")
-    arima_param_grid = {"p": [1, 2, 3], "d": [0, 1], "q": [0, 1, 2]}
-
-    if st.button("🚀 Train ARIMA Model", key="train_arima"):
-        with st.spinner("Training ARIMA model..."):
-            train_arima_model(arima_param_grid, arima_input_example, arima_model_path, models_folder)
-
-    # 5️⃣ LightGBM Model Training
-    st.subheader("5️⃣ LightGBM Model Training (RandomizedSearchCV)")
-    lgb_param_grid = {
-        'num_leaves': [31, 50, 100],
-        'max_depth': [-1, 5, 10],
-        'learning_rate': [0.01, 0.05, 0.1],
-        'n_estimators': [100, 200, 500],
-        'feature_fraction': [0.6, 0.8, 1.0],
-        'bagging_fraction': [0.6, 0.8, 1.0],
-        'bagging_freq': [1, 3, 5],
-        'lambda_l1': [0, 1, 2],
-        'lambda_l2': [0, 1, 2],
-        'min_data_in_leaf': [20, 50, 100]
-    }
-
-    if st.button("🚀 Train LightGBM Model", key="train_lightgbm"):
-        with st.spinner("Training LightGBM model..."):
-            train_lightgbm_model(lgb_param_grid, lgb_model_path, models_folder)
-
-    # 6️⃣ Model Registry Management
-    st.subheader("6️⃣ Model Registry Management")
-    st.write("Promote models in **BestForecastModels** registry:")
-
-    col1, col2 = st.columns(2)
-
-    with col1:
-        model_version = st.text_input("Model version to promote:", "1")
-        
-    with col2:
-        target_stage = st.selectbox("Target stage:", ["Staging", "Production", "Archived"])
-
-    if st.button(f"Promote BestForecastModels v{model_version} to {target_stage.upper()}"):
-        try:
-            client = mlflow.tracking.MlflowClient()
-            client.transition_model_version_stage(
-                name="BestForecastModels", 
-                version=int(model_version), 
-                stage=target_stage
-            )
-            st.success(f"BestForecastModels v{model_version} promoted to **{target_stage.upper()}**")
-        except Exception as e:
-            st.error(f"Error promoting model: {e}")
-
-    # 7️⃣ MLflow UI (Info only - cannot launch UI on Streamlit Cloud)
-    st.subheader("7️⃣ MLflow UI")
-    st.info("MLflow UI cannot be launched on Streamlit Cloud. Use local deployment for MLflow UI.")
-
-    # 8️⃣ Experiment Status
-    st.subheader("8️⃣ Experiment Status")
-    if st.button("Check Best Models Experiment"):
-        try:
-            client = mlflow.tracking.MlflowClient()
-            experiment = client.get_experiment_by_name(BEST_MODELS_EXPERIMENT)
-            if experiment:
-                runs = client.search_runs(experiment_ids=[experiment.experiment_id])
-                st.write(f"**Best Models Experiment:** {BEST_MODELS_EXPERIMENT}")
-                st.write(f"**Total Best Model Runs:** {len(runs)}")
-                
-                if runs:
-                    st.write("**Registered Best Models:**")
-                    for run in runs:
-                        model_type = run.data.tags.get("model_type", "unknown")
-                        rmse = run.data.metrics.get("test_rmse", run.data.metrics.get("rmse", "N/A"))
-                        mae = run.data.metrics.get("test_mae", run.data.metrics.get("mae", "N/A"))
-                        st.write(f"- {run.info.run_name} ({model_type}) - RMSE: {rmse}, MAE: {mae}")
-                else:
-                    st.info("No runs found in best_models experiment. Train models first.")
-            else:
-                st.info("Best Models experiment not created yet. Train models first.")
-        except Exception as e:
-            st.error(f"Error checking experiment status: {e}")
-
-# ... (rest of the training functions remain the same as previous version)
-# train_prophet_model, train_arima_model, train_lightgbm_model functions remain unchanged
-
-# In training.py, update the train_prophet_model function:
-
-def train_prophet_model(prophet_param_grid, prophet_input_example, prophet_model_path, models_folder):
-    """Train Prophet model with grid search"""
-    if 'mlflow_prophet_train_df' not in st.session_state:
-        st.error("Please load dataset first")
-        return
-        
-    st.write("Starting Prophet Grid Search...")
-    
-    # Initialize variables
-    best_prophet_rmse = float("inf")
-    best_prophet_mae = float("inf")
-    best_prophet_params = None
-    best_prophet_model = None  # Initialize here
-
-    progress_text = st.empty()
-    progress_bar = st.progress(0)
-
-    # Generate all parameter combinations
-    param_combinations = []
-    for changepoint_prior_scale in prophet_param_grid["changepoint_prior_scale"]:
-        for seasonality_prior_scale in prophet_param_grid["seasonality_prior_scale"]:
-            for holidays_prior_scale in prophet_param_grid["holidays_prior_scale"]:
-                for seasonality_mode in prophet_param_grid["seasonality_mode"]:
-                    for yearly_seasonality in prophet_param_grid["yearly_seasonality"]:
-                        for weekly_seasonality in prophet_param_grid["weekly_seasonality"]:
-                            param_combinations.append({
-                                "changepoint_prior_scale": changepoint_prior_scale,
-                                "seasonality_prior_scale": seasonality_prior_scale,
-                                "holidays_prior_scale": holidays_prior_scale,
-                                "seasonality_mode": seasonality_mode,
-                                "yearly_seasonality": yearly_seasonality,
-                                "weekly_seasonality": weekly_seasonality
-                            })
-
-    total_runs = len(param_combinations)
-    run_count = 0
-
-    # Setup experiment
-    setup_mlflow_experiment("prophet_test")
-
-    for params in param_combinations:
-        run_name = f"Prophet_{params['changepoint_prior_scale']}_{params['seasonality_prior_scale']}"
-        try:
-            with mlflow.start_run(run_name=run_name):
-                mlflow.log_params(params)
-
-                # Initialize and fit Prophet model
-                model = Prophet(
-                    changepoint_prior_scale=params["changepoint_prior_scale"],
-                    seasonality_prior_scale=params["seasonality_prior_scale"],
-                    holidays_prior_scale=params["holidays_prior_scale"],
-                    seasonality_mode=params["seasonality_mode"],
-                    yearly_seasonality=params["yearly_seasonality"],
-                    weekly_seasonality=params["weekly_seasonality"]
-                )
-                
-                model_fit = model.fit(st.session_state.mlflow_prophet_train_df)
-
-                # Make predictions
-                train_forecast = model_fit.predict(st.session_state.mlflow_prophet_train_df[['ds']])
-                test_forecast = model_fit.predict(st.session_state.mlflow_prophet_test_df[['ds']])
-
-                # Calculate metrics
-                train_rmse = mean_squared_error(st.session_state.mlflow_prophet_train_df['y'], train_forecast['yhat']) ** 0.5
-                train_mae = mean_absolute_error(st.session_state.mlflow_prophet_train_df['y'], train_forecast['yhat'])
-                test_rmse = mean_squared_error(st.session_state.mlflow_prophet_test_df['y'], test_forecast['yhat']) ** 0.5
-                test_mae = mean_absolute_error(st.session_state.mlflow_prophet_test_df['y'], test_forecast['yhat'])
-
-                mlflow.log_metric("train_rmse", train_rmse)
-                mlflow.log_metric("train_mae", train_mae)
-                mlflow.log_metric("test_rmse", test_rmse)
-                mlflow.log_metric("test_mae", test_mae)
-
-                # Update best model
-                if test_rmse < best_prophet_rmse:
-                    best_prophet_rmse = test_rmse
-                    best_prophet_mae = test_mae
-                    best_prophet_params = params
-                    best_prophet_model = model_fit
-
-                run_count += 1
-                progress_text.text(f"Prophet Run {run_count}/{total_runs} — MAE={test_mae:.2f}, RMSE={test_rmse:.2f}")
-                progress_bar.progress(run_count / total_runs)
-
-        except Exception as e:
-            st.warning(f"Prophet Run {run_name} failed: {e}")
-            continue
-
-    st.success(f"Prophet Grid search complete. Best RMSE={best_prophet_rmse:.2f}, Best MAE={best_prophet_mae:.2f}")
-    st.write("Best Prophet Parameters:", best_prophet_params)
-
-    # Save and register best Prophet model
-    if best_prophet_model is not None:
-        # Ensure models folder exists
-        os.makedirs(models_folder, exist_ok=True)
-        
-        # Save locally - this will overwrite existing file
-        with open(prophet_model_path, "wb") as f:
-            pickle.dump(best_prophet_model, f)
-        st.success(f"Prophet model saved to: {prophet_model_path}")
-
-        # Register to best_models experiment
-        setup_mlflow_experiment(BEST_MODELS_EXPERIMENT)
-        with mlflow.start_run(run_name="Best_Prophet_Model"):
-            mlflow.log_params(best_prophet_params)
-            mlflow.log_metric("rmse", best_prophet_rmse)
-            mlflow.log_metric("mae", best_prophet_mae)
-            mlflow.set_tag("model_type", "prophet")
+            # Always enabled with constant email
+            email_enabled = st.checkbox("Enable Email Alerts", value=True)
             
-            # Save as PYFUNC only
-            wrapper_model = ProphetModelWrapper(best_prophet_model)
-            
-            # Generate signature
-            prediction_output = best_prophet_model.predict(prophet_input_example)[['yhat']]
-            signature = infer_signature(prophet_input_example, prediction_output)
-
-            # IMPORTANT: This line registers the model
-            mlflow.pyfunc.log_model(
-                python_model=wrapper_model,
-                artifact_path="prophet_model",
-                registered_model_name=PROPHET_REGISTRY_NAME,
-                input_example=prophet_input_example,
-                signature=signature
+            # Show constant email (read-only)
+            st.text_input(
+                "Recipient Email", 
+                value=CONSTANT_RECIPIENT_EMAIL,
+                help="Email address to receive high error alerts",
+                disabled=True
             )
-
-        st.success(f"Best Prophet Model registered to MLflow as PYFUNC (RMSE: {best_prophet_rmse:.2f})")
-        
-        # Clear cache to ensure the main app sees the new model
-        from model_registry import load_production_model_from_registry
-        load_production_model_from_registry.clear()
-        
-        st.info("🔄 Model registered successfully! You can now use it in the Forecast Engine.")
+            
+            # Add a test button
+            if st.button("Test Email Connection"):
+                test_email_connection(CONSTANT_RECIPIENT_EMAIL)
     else:
-        st.error("No valid Prophet model was trained during grid search.")
-
-def train_arima_model(arima_param_grid, arima_input_example, arima_model_path, models_folder):
-    """Train ARIMA model with grid search"""
-    if 'mlflow_arima_train_series' not in st.session_state:
-        st.error("Please load dataset first")
+        email_enabled = False
+        st.warning("Email alert system not available. Please ensure email_alert.py and email_content.py are in the same directory.")
+    
+    # Load actual dataset first
+    try:
+        paths = get_model_paths()
+        actual_dataset_path = paths['actual_dataset']
+        
+        # Use Streamlit's file uploader as fallback for cloud deployment
+        if not os.path.exists(actual_dataset_path):
+            st.info("Upload actual dataset CSV file for monitoring:")
+            uploaded_file = st.file_uploader("Upload actual_dataset.csv", type="csv")
+            if uploaded_file is not None:
+                actual_df = pd.read_csv(uploaded_file)
+                actual_df['date'] = pd.to_datetime(actual_df['date'])
+                actual_df = actual_df.rename(columns={'sales': 'actual_sales'})
+                st.success("✅ Loaded actual dataset from uploaded file")
+            else:
+                st.error("Please upload actual_dataset.csv file")
+                return
+        else:
+            actual_df = pd.read_csv(actual_dataset_path)
+            actual_df['date'] = pd.to_datetime(actual_df['date'])
+            actual_df = actual_df.rename(columns={'sales': 'actual_sales'})
+            st.success(f"✅ Loaded actual dataset from {actual_dataset_path}")
+        
+        # Show actual data date range
+        if not actual_df.empty:
+            st.info(f"📅 Actual data range: {actual_df['date'].min().date()} to {actual_df['date'].max().date()}")
+    except Exception as e:
+        st.error(f"❌ Could not load actual dataset: {e}")
+        st.info("Please ensure 'actual_dataset.csv' exists in your directory or upload it")
         return
-        
-    st.write("Starting ARIMA Grid Search...")
     
-    # Setup experiment with proper artifact location
-    setup_mlflow_experiment("arima_test")
+    # Try to get prediction data directly from MLflow
+    prediction_data = get_latest_prediction_from_mlflow()
     
-    best_arima_rmse = float("inf")
-    best_arima_mae = float("inf")
-    best_arima_params = None
-    best_arima_model = None
-
-    progress_text = st.empty()
-    progress_bar = st.progress(0)
-
-    grid = list(product(arima_param_grid["p"], arima_param_grid["d"], arima_param_grid["q"]))
-    total_runs = len(grid)
-    run_count = 0
-
-    for p, d, q in grid:
-        run_name = f"ARIMA_{p}{d}{q}"
-        try:
-            with mlflow.start_run(run_name=run_name):
-                mlflow.log_params({"p": p, "d": d, "q": q})
-
-                model = ARIMA(st.session_state.mlflow_arima_train_series, order=(p, d, q))
-                model_fit = model.fit()
-
-                y_train_pred = model_fit.predict(start=st.session_state.mlflow_arima_train_series.index[0], end=st.session_state.mlflow_arima_train_series.index[-1])
-                y_test_pred = model_fit.predict(start=st.session_state.mlflow_arima_test_series.index[0], end=st.session_state.mlflow_arima_test_series.index[-1])
-
-                train_rmse = mean_squared_error(st.session_state.mlflow_arima_train_series, y_train_pred) ** 0.5
-                train_mae = mean_absolute_error(st.session_state.mlflow_arima_train_series, y_train_pred)
-                test_rmse = mean_squared_error(st.session_state.mlflow_arima_test_series, y_test_pred) ** 0.5
-                test_mae = mean_absolute_error(st.session_state.mlflow_arima_test_series, y_test_pred)
-
-                mlflow.log_metric("train_rmse", train_rmse)
-                mlflow.log_metric("train_mae", train_mae)
-                mlflow.log_metric("test_rmse", test_rmse)
-                mlflow.log_metric("test_mae", test_mae)
-
-                if test_rmse < best_arima_rmse:
-                    best_arima_rmse = test_rmse
-                    best_arima_mae = test_mae
-                    best_arima_params = {"p": p, "d": d, "q": q}
-                    best_arima_model = model_fit
-
-                run_count += 1
-                progress_text.text(f"ARIMA Run {run_count}/{total_runs} — MAE={test_mae:.2f}, RMSE={test_rmse:.2f}")
-                progress_bar.progress(run_count / total_runs)
-
-        except Exception as e:
-            st.warning(f"ARIMA Run {run_name} failed: {e}")
-
-    st.success(f"ARIMA Grid search complete. Best RMSE={best_arima_rmse:.2f}, Best MAE={best_arima_mae:.2f}")
-    st.write("Best ARIMA Parameters:", best_arima_params)
-
-    # Save and register best ARIMA model
-    if best_arima_model is not None:
-        # Ensure models folder exists
-        os.makedirs(models_folder, exist_ok=True)
+    if prediction_data is None:
+        show_prediction_instructions(actual_df)
+        return
+    
+    # Show prediction data source and range
+    st.success(f"✅ Loaded predictions from MLflow (latest run)")
+    st.info(f"📅 Prediction data range: {prediction_data['date'].min().date()} to {prediction_data['date'].max().date()}")
+    
+    # Check if we have overlapping dates
+    overlapping_dates = pd.merge(
+        prediction_data[['date']],
+        actual_df[['date']],
+        on='date',
+        how='inner'
+    )
+    
+    if overlapping_dates.empty:
+        st.warning("⚠️ No overlapping dates between predictions and actual data!")
         
-        # Save locally - this will overwrite existing file
-        with open(arima_model_path, "wb") as f:
-            pickle.dump(best_arima_model, f)
-        st.success(f"ARIMA model saved to: {arima_model_path}")
-
-        # Save as PYFUNC only
-        wrapper_model = ARIMAModelWrapper(best_arima_model)
+        # Offer to create historical predictions
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("🔄 Generate Historical Predictions", type="primary"):
+                create_historical_predictions(actual_df)
+                st.rerun()
         
-        # Generate signature
-        prediction_output = best_arima_model.predict(
-            start=arima_input_example.index[0], 
-            end=arima_input_example.index[-1]
+        with col2:
+            if st.button("📊 Show Demo Comparison"):
+                show_demo_comparison(actual_df)
+        
+        return
+    
+    # Merge predictions with actual data
+    comparison_df = merge_predictions_with_actuals(prediction_data, actual_df)
+    
+    if comparison_df.empty:
+        st.warning("No overlapping data found between predictions and actual dataset.")
+        return
+    
+    # Display main comparison with email alerts - USING CONSTANT EMAIL
+    display_comparison_analysis(comparison_df, prediction_data, email_enabled, CONSTANT_RECIPIENT_EMAIL)
+
+def test_email_connection(recipient_email):
+    """Test email connection and send a test message"""
+    try:
+        if not EMAIL_ALERTS_AVAILABLE:
+            st.error("Email alerts are not available. Check your imports.")
+            return
+            
+        email_alert = EmailAlert.get_instance()
+        
+        # Create test email content
+        email_content = EmailContent()
+        email_content.recipient = recipient_email
+        email_content.subject = "Test Email - Monitoring System"
+        
+        test_body = {
+            'title': 'Test Email Connection',
+            'message': 'This is a test email from the Monitoring Dashboard to verify the email alert system is working correctly.',
+            'table_rows': {
+                'System': 'Prediction Monitoring Dashboard',
+                'Status': 'Operational',
+                'Test Time': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            },
+            'notes': 'If you receive this email, the alert system is configured correctly.'
+        }
+        email_content.message_body = test_body
+        email_content.prepare_html()
+        
+        # Send test email
+        email_alert.send_email(email_content)
+        st.success(f"✅ Test email sent successfully to {recipient_email}!")
+        
+    except Exception as e:
+        st.error(f"❌ Failed to send test email: {e}")
+        st.info("""
+        Common issues:
+        1. Make sure your .env file exists in the same directory
+        2. Check that .env contains SENDER_EMAIL and SENDER_PASSWORD
+        3. For Gmail, use an App Password (not your regular password)
+        4. Ensure your email credentials are correct
+        """)
+
+def send_high_error_alert(recipient_email, error_data, comparison_stats):
+    """Send email alert for high prediction error"""
+    try:
+        if not EMAIL_ALERTS_AVAILABLE:
+            print("Email alerts not available - EMAIL_ALERTS_AVAILABLE is False")
+            return False
+            
+        if EmailAlert is None:
+            print("EmailAlert is None - cannot send email")
+            return False
+            
+        email_alert = EmailAlert.get_instance()
+        email_content = EmailContent()
+        email_content.recipient = recipient_email
+        email_content.subject = f"🚨 High Prediction Error Alert - {error_data['date'].strftime('%Y-%m-%d')}"
+        
+        # Calculate error percentage
+        error_percentage = (error_data['absolute_error'] / error_data['actual_sales']) * 100
+        
+        # Prepare email body
+        alert_body = {
+            'title': 'High Prediction Error Detected',
+            'message': f'A significant prediction error has been detected in the monitoring system. The error rate of {error_percentage:.1f}% exceeds the 25% threshold.',
+            'table_rows': {
+                'Date': error_data['date'].strftime('%Y-%m-%d'),
+                'Actual Sales': f"${error_data['actual_sales']:,.0f}",
+                'Predicted Sales': f"${error_data['predicted']:,.0f}",
+                'Absolute Error': f"${error_data['absolute_error']:,.0f}",
+                'Error Percentage': f"{error_percentage:.1f}%",
+                'Model Type': error_data.get('model_type', 'Unknown'),
+                'Current MAE': f"${comparison_stats['mae']:,.0f}",
+                'Current Accuracy': f"{comparison_stats['accuracy']:.1f}%"
+            },
+            'notes': 'Please review the model performance and consider retraining or adjusting parameters. This alert was triggered when the absolute error exceeded 25% of the actual sales value.'
+        }
+        email_content.message_body = alert_body
+        email_content.prepare_html()
+        
+        # Send alert email
+        success = email_alert.send_email(email_content)
+        if success:
+            print("✅ Email sent successfully!")
+        return success
+        
+    except Exception as e:
+        print(f"Failed to send email alert: {e}")
+        return False
+
+def get_latest_prediction_from_mlflow():
+    """Fetch the latest prediction file directly from MLflow"""
+    try:
+        client = MlflowClient()
+        
+        # Search for prediction runs specifically
+        runs = client.search_runs(
+            experiment_ids=["0"],  # Search all experiments
+            filter_string="tags.mlflow.runStatus = 'FINISHED' AND tags.log_type = 'prediction'",
+            order_by=["start_time DESC"],
+            max_results=10
         )
-        signature = infer_signature(arima_input_example, prediction_output)
-
-        # Register to best_models experiment
-        setup_mlflow_experiment(BEST_MODELS_EXPERIMENT)
-        with mlflow.start_run(run_name="Best_ARIMA_Model"):
-            mlflow.log_params(best_arima_params)
-            mlflow.log_metric("rmse", best_arima_rmse)
-            mlflow.log_metric("mae", best_arima_mae)
-            mlflow.set_tag("model_type", "arima")
-            
-            mlflow.pyfunc.log_model(
-                python_model=wrapper_model,
-                artifact_path="arima_model",
-                registered_model_name=ARIMA_REGISTRY_NAME,
-                signature=signature,
-                input_example=arima_input_example
-            )
-
-        st.success(f"Best ARIMA model registered to MLflow as PYFUNC (RMSE: {best_arima_rmse:.2f})")
-
-        # Show next steps
-        st.info("Model saved locally and registered in MLflow. You can now use it in the Forecast Engine.")
-    else:
-        st.error("No valid ARIMA model was trained.")
-
-def train_lightgbm_model(lgb_param_grid, lgb_model_path, models_folder):
-    """Train LightGBM model with RandomizedSearchCV"""
-    if 'mlflow_X_train' not in st.session_state:
-        st.error("Please load dataset first")
-        return
         
-    st.write("Starting LightGBM RandomizedSearchCV...")
-    
-    # Setup experiment with proper artifact location
-    setup_mlflow_experiment("lightgbm_test")
-    
-    best_lgb_rmse = float("inf")
-    best_lgb_mae = float("inf")
-    best_lgb_params = None
-    best_lgb_model = None
+        if not runs:
+            # Fallback: search any finished run with prediction artifacts
+            runs = client.search_runs(
+                experiment_ids=["0"],
+                filter_string="tags.mlflow.runStatus = 'FINISHED'",
+                order_by=["start_time DESC"],
+                max_results=10
+            )
+        
+        for run in runs:
+            result = extract_predictions_from_mlflow_run(run)
+            if result is not None and not result.empty:
+                st.info(f"📁 Using predictions from MLflow run: {run.info.run_name}")
+                return result
+        
+        # If no predictions found in runs, check the prediction_logs experiment
+        return search_prediction_logs_experiment()
+                
+    except Exception as e:
+        st.error(f"Error fetching predictions from MLflow: {e}")
+        return None
 
-    progress_text = st.empty()
+def search_prediction_logs_experiment():
+    """Search the dedicated prediction_logs experiment"""
+    try:
+        client = MlflowClient()
+        
+        # Get the prediction_logs experiment
+        experiment = client.get_experiment_by_name("prediction_logs")
+        if experiment:
+            runs = client.search_runs(
+                experiment_ids=[experiment.experiment_id],
+                filter_string="tags.mlflow.runStatus = 'FINISHED'",
+                order_by=["start_time DESC"],
+                max_results=5
+            )
+            
+            for run in runs:
+                result = extract_predictions_from_mlflow_run(run)
+                if result is not None and not result.empty:
+                    st.info(f"📁 Using predictions from prediction_logs run: {run.info.run_name}")
+                    return result
+        
+        return None
+        
+    except Exception as e:
+        st.error(f"Error searching prediction_logs experiment: {e}")
+        return None
+
+def extract_predictions_from_mlflow_run(run):
+    """Extract prediction data from an MLflow run artifact"""
+    try:
+        client = MlflowClient()
+        run_id = run.info.run_id
+        
+        # List all artifacts in the run
+        artifacts = client.list_artifacts(run_id)
+        
+        for artifact in artifacts:
+            if artifact.path.endswith('.csv') or 'predictions' in artifact.path:
+                with tempfile.TemporaryDirectory() as tmp_dir:
+                    try:
+                        # Download the artifact
+                        local_path = client.download_artifacts(run_id, artifact.path, tmp_dir)
+                        
+                        # Handle directory artifacts
+                        if os.path.isdir(local_path):
+                            csv_files = [f for f in os.listdir(local_path) if f.endswith('.csv')]
+                            if csv_files:
+                                local_path = os.path.join(local_path, csv_files[0])
+                        
+                        if os.path.exists(local_path) and os.path.getsize(local_path) > 0:
+                            pred_df = pd.read_csv(local_path)
+                            
+                            # Standardize the dataframe
+                            standardized_df = standardize_prediction_dataframe(pred_df)
+                            
+                            if not standardized_df.empty:
+                                return standardized_df
+                                
+                    except Exception as e:
+                        st.warning(f"Could not read artifact {artifact.path}: {e}")
+                        continue
+        
+        return None
+        
+    except Exception as e:
+        st.warning(f"Error extracting from run {run.info.run_name}: {e}")
+        return None
+
+def standardize_prediction_dataframe(df):
+    """Standardize prediction dataframe to common format"""
+    try:
+        # Create a copy to avoid modifying original
+        result_df = df.copy()
+        
+        # Handle date column
+        if 'date' in result_df.columns:
+            result_df['date'] = pd.to_datetime(result_df['date'])
+        elif 'ds' in result_df.columns:
+            result_df = result_df.rename(columns={'ds': 'date'})
+            result_df['date'] = pd.to_datetime(result_df['date'])
+        else:
+            # Try to find any datetime column
+            date_cols = [col for col in result_df.columns if 'date' in col.lower() or 'time' in col.lower()]
+            if date_cols:
+                result_df = result_df.rename(columns={date_cols[0]: 'date'})
+                result_df['date'] = pd.to_datetime(result_df['date'])
+            else:
+                st.warning("No date column found in prediction data")
+                return pd.DataFrame()
+        
+        # Handle prediction column
+        if 'predicted' in result_df.columns:
+            # Already standardized
+            pass
+        elif 'prediction' in result_df.columns:
+            result_df = result_df.rename(columns={'prediction': 'predicted'})
+        elif 'yhat' in result_df.columns:
+            result_df = result_df.rename(columns={'yhat': 'predicted'})
+        elif 'forecast' in result_df.columns:
+            result_df = result_df.rename(columns={'forecast': 'predicted'})
+        else:
+            # Try to find any prediction-like column
+            pred_cols = [col for col in result_df.columns if any(x in col.lower() for x in ['pred', 'yhat', 'forecast', 'estimate'])]
+            if pred_cols:
+                result_df = result_df.rename(columns={pred_cols[0]: 'predicted'})
+            else:
+                # Use first numeric column as prediction
+                numeric_cols = result_df.select_dtypes(include=[np.number]).columns
+                if len(numeric_cols) > 0:
+                    result_df = result_df.rename(columns={numeric_cols[0]: 'predicted'})
+                else:
+                    st.warning("No prediction column found in data")
+                    return pd.DataFrame()
+        
+        # Ensure model_type exists
+        if 'model_type' not in result_df.columns:
+            result_df['model_type'] = 'mlflow_model'
+        
+        # Select only necessary columns
+        required_cols = ['date', 'predicted', 'model_type']
+        available_cols = [col for col in required_cols if col in result_df.columns]
+        
+        return result_df[available_cols]
+        
+    except Exception as e:
+        st.error(f"Error standardizing prediction data: {e}")
+        return pd.DataFrame()
+
+def create_historical_predictions(actual_df):
+    """Create predictions for historical dates that exist in the actual dataset"""
+    try:
+        # Use the last 30 days of actual data for predictions
+        historical_dates = actual_df['date'].tail(30).copy()
+        
+        # Create realistic predictions with some noise
+        predictions_data = []
+        for date in historical_dates:
+            actual_row = actual_df[actual_df['date'] == date]
+            if not actual_row.empty:
+                actual_sales = actual_row['actual_sales'].iloc[0]
+                # Add realistic noise (5-15% variation)
+                noise = np.random.normal(0, 0.1)  # 10% standard deviation
+                predicted_sales = actual_sales * (1 + noise)
+                
+                predictions_data.append({
+                    'date': date,
+                    'predicted': max(predicted_sales, 0),  # Ensure non-negative
+                    'model_type': 'historical_demo',
+                    'prediction_timestamp': datetime.now()
+                })
+        
+        if predictions_data:
+            pred_df = pd.DataFrame(predictions_data)
+            
+            # Log to MLflow instead of saving to CSV
+            log_predictions_to_mlflow(pred_df, "historical_demo")
+            
+            st.success(f"✅ Generated {len(pred_df)} historical predictions and logged to MLflow!")
+            st.info("These predictions use actual historical data with realistic noise for demonstration.")
+        else:
+            st.error("Could not generate historical predictions")
+            
+    except Exception as e:
+        st.error(f"Error generating historical predictions: {e}")
+
+def log_predictions_to_mlflow(predictions_df, model_type):
+    """Log predictions directly to MLflow"""
+    try:
+        mlflow.set_experiment("prediction_logs")
+        
+        with mlflow.start_run(run_name=f"monitoring_{model_type}_{datetime.now().strftime('%Y%m%d_%H%M%S')}") as run:
+            # Log parameters
+            mlflow.log_params({
+                "model_type": model_type,
+                "total_predictions": len(predictions_df),
+                "purpose": "monitoring_demo",
+                "timestamp": datetime.now().isoformat()
+            })
+            
+            # Log metrics
+            if 'actual_sales' in predictions_df.columns and 'predicted' in predictions_df.columns:
+                valid_data = predictions_df.dropna(subset=['actual_sales', 'predicted'])
+                if len(valid_data) > 0:
+                    mae = (valid_data['actual_sales'] - valid_data['predicted']).abs().mean()
+                    rmse = ((valid_data['actual_sales'] - valid_data['predicted']) ** 2).mean() ** 0.5
+                    mlflow.log_metrics({"demo_mae": mae, "demo_rmse": rmse})
+            
+            # Log the predictions as artifact
+            with tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False) as temp_file:
+                predictions_df.to_csv(temp_file.name, index=False)
+                mlflow.log_artifact(temp_file.name, "predictions")
+            
+            mlflow.set_tags({
+                "prediction_type": "batch",
+                "environment": "demo",
+                "log_type": "prediction"
+            })
+            
+    except Exception as e:
+        st.warning(f"Could not log to MLflow: {e}")
+
+def show_demo_comparison(actual_df):
+    """Show a demonstration comparison using the last 30 days of actual data"""
+    st.subheader("🎯 Demonstration: Historical Prediction Analysis")
+    
+    # Use last 30 days for demonstration
+    demo_dates = actual_df['date'].tail(30).copy()
+    demo_actual = actual_df[actual_df['date'].isin(demo_dates)].copy()
+    
+    # Create simulated predictions with realistic patterns
+    demo_predictions = []
+    for date in demo_dates:
+        actual_row = demo_actual[demo_actual['date'] == date]
+        if not actual_row.empty:
+            actual_sales = actual_row['actual_sales'].iloc[0]
+            # Simulate different prediction scenarios
+            if len(demo_predictions) < 10:
+                # Good predictions (small error)
+                error = np.random.normal(0, 0.05)  # 5% error
+            elif len(demo_predictions) < 20:
+                # Medium predictions
+                error = np.random.normal(0, 0.1)   # 10% error
+            else:
+                # Some bad predictions
+                error = np.random.normal(0, 0.15)  # 15% error
+            
+            predicted_sales = actual_sales * (1 + error)
+            
+            demo_predictions.append({
+                'date': date,
+                'predicted': max(predicted_sales, 0),
+                'model_type': 'demo_model'
+            })
+    
+    demo_pred_df = pd.DataFrame(demo_predictions)
+    comparison_df = pd.merge(demo_actual, demo_pred_df, on='date')
+    
+    # Calculate errors
+    comparison_df['absolute_error'] = abs(comparison_df['predicted'] - comparison_df['actual_sales'])
+    comparison_df['percentage_error'] = (comparison_df['absolute_error'] / comparison_df['actual_sales']) * 100
+    comparison_df['error'] = comparison_df['predicted'] - comparison_df['actual_sales']
+    
+    display_comparison_analysis(comparison_df, demo_pred_df, False, "")
+    
+    st.info("💡 This is a demonstration using simulated predictions. To see real model performance, generate predictions using the Forecast Engine.")
+
+def show_prediction_instructions(actual_df):
+    """Show instructions for generating predictions"""
+    st.warning("No prediction data found in MLflow!")
+    
+    st.subheader("🚀 How to Generate Predictions for Monitoring")
+    
+    st.write(f"""
+    Your actual data goes from **{actual_df['date'].min().date()}** to **{actual_df['date'].max().date()}**.
+    
+    To see meaningful comparisons in the Monitoring dashboard, you need predictions for dates that exist in your actual dataset.
+    """)
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.write("**Option 1: Generate Historical Predictions**")
+        st.write("""
+        - Click the button below to create demo predictions
+        - Uses your actual historical data
+        - Adds realistic noise for demonstration
+        - Perfect for testing the monitoring features
+        """)
+        
+        if st.button("🔄 Generate Historical Demo Predictions", type="primary"):
+            create_historical_predictions(actual_df)
+            st.rerun()
+    
+    with col2:
+        st.write("**Option 2: Use Forecast Engine**")
+        st.write("""
+        - Go to **Forecast Engine** tab
+        - Choose dates within your actual data range
+        - For example: 2017-08-16 to 2017-09-15
+        - This will create comparable predictions in MLflow
+        """)
+    
+    st.write("**Recommended Date Range for Testing:**")
+    # Show the last 30 days of actual data as recommended range
+    last_date = actual_df['date'].max().date()
+    start_date = (actual_df['date'].max() - timedelta(days=30)).date()
+    st.code(f"Start: {start_date}\nEnd: {last_date}")
+
+def merge_predictions_with_actuals(pred_df, actual_df):
+    """Merge prediction data with actual sales data"""
+    try:
+        # Ensure we have the required columns
+        if 'predicted' not in pred_df.columns:
+            st.error("Prediction data missing 'predicted' column")
+            return pd.DataFrame()
+        
+        # Ensure model_type exists in prediction data
+        if 'model_type' not in pred_df.columns:
+            pred_df['model_type'] = 'unknown'
+        
+        # Merge on date
+        merged_df = pd.merge(
+            pred_df[['date', 'predicted', 'model_type']],
+            actual_df[['date', 'actual_sales']],
+            on='date',
+            how='inner'
+        )
+        
+        if merged_df.empty:
+            return pd.DataFrame()
+        
+        # Calculate errors
+        merged_df['absolute_error'] = abs(merged_df['predicted'] - merged_df['actual_sales'])
+        merged_df['percentage_error'] = (merged_df['absolute_error'] / merged_df['actual_sales']) * 100
+        merged_df['error'] = merged_df['predicted'] - merged_df['actual_sales']
+        
+        st.success(f"✅ Successfully merged {len(merged_df)} data points for comparison")
+        return merged_df
+        
+    except Exception as e:
+        st.error(f"Error merging data: {e}")
+        return pd.DataFrame()
+
+def display_comparison_analysis(comparison_df, pred_df, email_enabled=False, recipient_email=""):
+    """Display the main comparison charts with smooth point-by-point animation"""
+    
+    st.subheader("📊 Prediction vs Actual Comparison - Live Monitoring")
+    
+    # Create placeholders for dynamic updates
+    metrics_placeholder = st.empty()
+    chart_placeholder1 = st.empty()
+    chart_placeholder2 = st.empty()
+    chart_placeholder3 = st.empty()
+    table_placeholder = st.empty()
+    status_placeholder = st.empty()
+    
+    # Initialize empty data for animation
+    animated_df = pd.DataFrame()
+    high_error_detected = False
+    email_sent = False
+    
+    # Get the date range for progress tracking
+    total_rows = len(comparison_df)
+    
+    # Progress bar
     progress_bar = st.progress(0)
-
-    # Initialize LightGBM regressor
-    lgb_reg = lgb.LGBMRegressor(
-        random_state=42,
-        verbose=-1,
-        force_row_wise=True
-    )
-
-    # Setup RandomizedSearchCV
-    random_search = RandomizedSearchCV(
-        estimator=lgb_reg,
-        param_distributions=lgb_param_grid,
-        n_iter=10,  # Reduced for faster training
-        scoring='neg_mean_absolute_error',
-        cv=3,
-        verbose=0,
-        n_jobs=1,  # Use 1 job for Streamlit Cloud compatibility
-        random_state=42
-    )
-
-    st.text("Running LightGBM Hyperparameter Tuning...")
     
-    # Start MLflow run for the entire tuning process
-    with mlflow.start_run(run_name="LightGBM_RandomizedSearch"):
-        # Fit the randomized search
-        random_search.fit(st.session_state.mlflow_X_train, st.session_state.mlflow_y_train)
+    # Process data point by point for smooth animation
+    for idx, (index, row) in enumerate(comparison_df.iterrows()):
+        # Add current point to animated dataframe
+        current_row_df = pd.DataFrame([row])
+        animated_df = pd.concat([animated_df, current_row_df], ignore_index=True)
+        
+        # Calculate current metrics for email
+        current_mae = animated_df['absolute_error'].mean()
+        current_mape = animated_df['percentage_error'].mean()
+        current_accuracy = 100 - current_mape
+        comparison_stats = {
+            'mae': current_mae,
+            'accuracy': current_accuracy
+        }
+        
+        # Check for high error
+        if row['absolute_error'] > row['actual_sales'] * 0.25 and not high_error_detected:
+            high_error_detected = True
+            first_high_error = row.copy()
+            
+            # Send email alert if enabled
+            if email_enabled and not email_sent and recipient_email:
+                with status_placeholder.container():
+                    st.warning("🚨 Sending email alert...")
+                
+                email_sent = send_high_error_alert(recipient_email, first_high_error, comparison_stats)
+                
+                if email_sent:
+                    with status_placeholder.container():
+                        st.success(f"✅ Email alert sent to {recipient_email}")
+                else:
+                    with status_placeholder.container():
+                        st.error("❌ Failed to send email alert")
         
         # Update progress
-        progress_bar.progress(1.0)
-        progress_text.text("Tuning completed!")
+        progress = (idx + 1) / total_rows
+        progress_bar.progress(progress)
         
-        # Get best model and parameters
-        best_lgb_model = random_search.best_estimator_
-        best_lgb_params = random_search.best_params_
-        best_score = -random_search.best_score_
-
-        # Make predictions
-        y_train_pred = best_lgb_model.predict(st.session_state.mlflow_X_train)
-        y_test_pred = best_lgb_model.predict(st.session_state.mlflow_X_test)
-
-        # Calculate metrics
-        train_rmse = mean_squared_error(st.session_state.mlflow_y_train, y_train_pred) ** 0.5
-        train_mae = mean_absolute_error(st.session_state.mlflow_y_train, y_train_pred)
-        test_rmse = mean_squared_error(st.session_state.mlflow_y_test, y_test_pred) ** 0.5
-        test_mae = mean_absolute_error(st.session_state.mlflow_y_test, y_test_pred)
-
-        # Log parameters and metrics
-        mlflow.log_params(best_lgb_params)
-        mlflow.log_metric("train_rmse", train_rmse)
-        mlflow.log_metric("train_mae", train_mae)
-        mlflow.log_metric("test_rmse", test_rmse)
-        mlflow.log_metric("test_mae", test_mae)
-        mlflow.log_metric("best_cv_mae", best_score)
-
-    st.success(f"LightGBM RandomizedSearchCV complete. Best RMSE={test_rmse:.2f}, Best MAE={test_mae:.2f}")
-    st.write("Best LightGBM Parameters:", best_lgb_params)
-
-    # Save and register best LightGBM model
-    if best_lgb_model is not None:
-        # Ensure models folder exists
-        os.makedirs(models_folder, exist_ok=True)
+        # Update metrics
+        with metrics_placeholder.container():
+            col1, col2, col3, col4 = st.columns(4)
+            
+            mae = current_mae
+            rmse = (animated_df['absolute_error'] ** 2).mean() ** 0.5
+            mape = current_mape
+            accuracy = current_accuracy
+            
+            with col1:
+                st.metric("Mean Absolute Error (MAE)", f"${mae:,.0f}")
+            with col2:
+                st.metric("Root Mean Square Error (RMSE)", f"${rmse:,.0f}")
+            with col3:
+                st.metric("Mean Absolute Percentage Error (MAPE)", f"{mape:.1f}%")
+            with col4:
+                st.metric("Overall Accuracy", f"{accuracy:.1f}%")
         
-        # Save locally - this will overwrite existing file
-        with open(lgb_model_path, "wb") as f:
-            pickle.dump(best_lgb_model, f)
-        st.success(f"LightGBM model saved to: {lgb_model_path}")
-
-        # Create proper input example for MLflow with ds column
-        sample_dates = pd.date_range(start='2023-01-01', periods=5, freq='D')
-        lgb_input_example = pd.DataFrame({
-            'ds': sample_dates,
-            'year': sample_dates.year.astype('float64'),
-            'month': sample_dates.month.astype('float64'),
-            'day': sample_dates.day.astype('float64'),
-            'dayofweek': sample_dates.dayofweek.astype('float64'),
-            'quarter': sample_dates.quarter.astype('float64'),
-            'dayofyear': sample_dates.dayofyear.astype('float64'),
-            'weekofyear': sample_dates.isocalendar().week.astype('float64')
-        })
-
-        # Register to best_models experiment
-        setup_mlflow_experiment(BEST_MODELS_EXPERIMENT)
-        with mlflow.start_run(run_name="Best_LightGBM_Model"):
-            mlflow.log_params(best_lgb_params)
-            mlflow.log_metric("rmse", test_rmse)
-            mlflow.log_metric("mae", test_mae)
-            mlflow.set_tag("model_type", "lightgbm")
+        # Update comparison chart - Smooth point-by-point animation
+        with chart_placeholder1.container():
+            fig_comparison = go.Figure()
             
-            # Save as PYFUNC only
-            wrapper_model = LightGBMModelWrapper(best_lgb_model)
+            # Add actual sales line
+            if len(animated_df) > 1:
+                fig_comparison.add_trace(go.Scatter(
+                    x=animated_df['date'][:-1],
+                    y=animated_df['actual_sales'][:-1],
+                    mode='lines+markers',
+                    name='Actual Sales',
+                    line=dict(color='#2ecc71', width=2),
+                    marker=dict(size=4, color='#2ecc71', opacity=0.7)
+                ))
             
-            # Generate signature - use the full input with ds column
-            prediction_output = wrapper_model.predict(None, lgb_input_example)
-            signature = infer_signature(lgb_input_example, prediction_output)
-
-            mlflow.pyfunc.log_model(
-                python_model=wrapper_model,
-                artifact_path="lightgbm_model",
-                registered_model_name=LIGHTGBM_REGISTRY_NAME,
-                input_example=lgb_input_example,
-                signature=signature
+            # Add predicted sales line
+            if len(animated_df) > 1:
+                fig_comparison.add_trace(go.Scatter(
+                    x=animated_df['date'][:-1],
+                    y=animated_df['predicted'][:-1],
+                    mode='lines+markers',
+                    name='Predicted Sales',
+                    line=dict(color='#e74c3c', width=2, dash='dash'),
+                    marker=dict(size=4, color='#e74c3c', opacity=0.7)
+                ))
+            
+            # Add the current point with emphasis
+            if len(animated_df) > 0:
+                current_point = animated_df.iloc[-1]
+                
+                # Draw line from previous point to current point
+                if len(animated_df) > 1:
+                    prev_point = animated_df.iloc[-2]
+                    # Actual line segment
+                    fig_comparison.add_trace(go.Scatter(
+                        x=[prev_point['date'], current_point['date']],
+                        y=[prev_point['actual_sales'], current_point['actual_sales']],
+                        mode='lines',
+                        name='_Actual Segment',
+                        line=dict(color='#2ecc71', width=2.5),
+                        showlegend=False
+                    ))
+                    # Predicted line segment
+                    fig_comparison.add_trace(go.Scatter(
+                        x=[prev_point['date'], current_point['date']],
+                        y=[prev_point['predicted'], current_point['predicted']],
+                        mode='lines',
+                        name='_Predicted Segment',
+                        line=dict(color='#e74c3c', width=2.5, dash='dash'),
+                        showlegend=False
+                    ))
+                
+                # Highlight current points
+                fig_comparison.add_trace(go.Scatter(
+                    x=[current_point['date']],
+                    y=[current_point['actual_sales']],
+                    mode='markers',
+                    name='Current Actual',
+                    marker=dict(size=10, color='#2ecc71', symbol='circle', 
+                               line=dict(width=2, color='white'))
+                ))
+                fig_comparison.add_trace(go.Scatter(
+                    x=[current_point['date']],
+                    y=[current_point['predicted']],
+                    mode='markers',
+                    name='Current Predicted',
+                    marker=dict(size=10, color='#e74c3c', symbol='circle',
+                               line=dict(width=2, color='white'))
+                ))
+            
+            # Add vertical line at high error point if detected
+            if high_error_detected:
+                fig_comparison.add_shape(
+                    type="line",
+                    x0=first_high_error['date'],
+                    y0=0,
+                    x1=first_high_error['date'],
+                    y1=1,
+                    xref="x",
+                    yref="paper",
+                    line=dict(color="red", width=2, dash="dot")
+                )
+                fig_comparison.add_annotation(
+                    x=first_high_error['date'],
+                    y=1,
+                    xref="x",
+                    yref="paper",
+                    text="🚨 High Error!",
+                    showarrow=False,
+                    yshift=15,
+                    bgcolor="red",
+                    font=dict(color="white", size=12)
+                )
+            
+            fig_comparison.update_layout(
+                title=f"📈 Live Sales Comparison - Point {idx+1}/{total_rows}",
+                xaxis_title="Date",
+                yaxis_title="Sales Amount",
+                hovermode='x unified',
+                height=400,
+                showlegend=True
             )
-
-        st.success(f"Best LightGBM Model registered to MLflow as PYFUNC (RMSE: {test_rmse:.2f})")
-
-        # Show next steps
-        st.info("Model saved locally and registered in MLflow. You can now use it in the Forecast Engine.")
+            st.plotly_chart(fig_comparison, use_container_width=True)
+        
+        # Update additional charts
+        with chart_placeholder2.container():
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                # Error distribution
+                fig_errors = px.histogram(
+                    animated_df,
+                    x='absolute_error',
+                    title=f"📊 Error Distribution",
+                    nbins=min(8, max(3, len(animated_df)//2)),
+                    color_discrete_sequence=['#f39c12'],
+                    opacity=0.8
+                )
+                fig_errors.update_layout(
+                    xaxis_title="Absolute Error", 
+                    yaxis_title="Frequency", 
+                    height=300,
+                    showlegend=False
+                )
+                st.plotly_chart(fig_errors, use_container_width=True)
+            
+            with col2:
+                # Scatter plot
+                fig_scatter = px.scatter(
+                    animated_df,
+                    x='actual_sales',
+                    y='predicted',
+                    title=f"🎯 Predicted vs Actual",
+                    color_discrete_sequence=['#3498db']
+                )
+                # Add perfect prediction line
+                if len(animated_df) > 0:
+                    max_val = max(animated_df['actual_sales'].max(), animated_df['predicted'].max())
+                    fig_scatter.add_trace(go.Scatter(
+                        x=[0, max_val],
+                        y=[0, max_val],
+                        mode='lines',
+                        name='Perfect Prediction',
+                        line=dict(color='red', dash='dash', width=2)
+                    ))
+                # Highlight latest point
+                if len(animated_df) > 0:
+                    latest_point = animated_df.iloc[-1]
+                    fig_scatter.add_trace(go.Scatter(
+                        x=[latest_point['actual_sales']],
+                        y=[latest_point['predicted']],
+                        mode='markers',
+                        name='Current Point',
+                        marker=dict(size=10, color='#e74c3c', symbol='star', 
+                                   line=dict(width=2, color='white'))
+                    ))
+                fig_scatter.update_layout(
+                    showlegend=True, 
+                    height=300,
+                    xaxis_title="Actual Sales",
+                    yaxis_title="Predicted Sales"
+                )
+                st.plotly_chart(fig_scatter, use_container_width=True)
+        
+        # Update error trend chart
+        with chart_placeholder3.container():
+            fig_error_trend = go.Figure()
+            
+            # Add existing error line
+            if len(animated_df) > 1:
+                fig_error_trend.add_trace(go.Scatter(
+                    x=animated_df['date'][:-1],
+                    y=animated_df['absolute_error'][:-1],
+                    mode='lines+markers',
+                    name='Absolute Error',
+                    line=dict(color='#e74c3c', width=2),
+                    marker=dict(size=4, color='#e74c3c', opacity=0.7)
+                ))
+            
+            # Add current error point
+            if len(animated_df) > 0:
+                current_point = animated_df.iloc[-1]
+                
+                # Draw line segment from previous to current error
+                if len(animated_df) > 1:
+                    prev_point = animated_df.iloc[-2]
+                    fig_error_trend.add_trace(go.Scatter(
+                        x=[prev_point['date'], current_point['date']],
+                        y=[prev_point['absolute_error'], current_point['absolute_error']],
+                        mode='lines',
+                        name='_Error Segment',
+                        line=dict(color='#e74c3c', width=2.5),
+                        showlegend=False
+                    ))
+                
+                # Highlight current error point
+                fig_error_trend.add_trace(go.Scatter(
+                    x=[current_point['date']],
+                    y=[current_point['absolute_error']],
+                    mode='markers',
+                    name='Current Error',
+                    marker=dict(size=10, color='#e74c3c', symbol='circle',
+                               line=dict(width=2, color='white'))
+                ))
+            
+            # Add vertical line at high error point if detected
+            if high_error_detected:
+                fig_error_trend.add_shape(
+                    type="line",
+                    x0=first_high_error['date'],
+                    y0=0,
+                    x1=first_high_error['date'],
+                    y1=1,
+                    xref="x",
+                    yref="paper",
+                    line=dict(color="red", width=2, dash="dot")
+                )
+                fig_error_trend.add_annotation(
+                    x=first_high_error['date'],
+                    y=1,
+                    xref="x",
+                    yref="paper",
+                    text="🚨 High Error!",
+                    showarrow=False,
+                    yshift=15,
+                    bgcolor="red",
+                    font=dict(color="white", size=12)
+                )
+            
+            fig_error_trend.update_layout(
+                title=f"📉 Live Error Trend - Point {idx+1}/{total_rows}",
+                xaxis_title="Date",
+                yaxis_title="Absolute Error",
+                height=300,
+                showlegend=True
+            )
+            st.plotly_chart(fig_error_trend, use_container_width=True)
+        
+        # Update table
+        with table_placeholder.container():
+            st.subheader("📋 Live Data Points")
+            
+            # Show only the current point and a few recent ones
+            display_count = min(8, len(animated_df))
+            recent_df = animated_df.tail(display_count).copy()
+            
+            # Create display dataframe
+            display_df = recent_df.copy()
+            display_df = display_df.rename(columns={
+                'actual_sales': 'actual',
+                'absolute_error': 'mae',
+                'percentage_error': 'mape_percent'
+            })
+            
+            display_df['date'] = display_df['date'].dt.strftime('%Y-%m-%d')
+            display_df['prediction_timestamp'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            display_df['rmse'] = (display_df['mae'] ** 2)
+            
+            # Add alert column
+            for display_idx, (_, display_row) in enumerate(display_df.iterrows()):
+                if display_row['mae'] > display_row['actual'] * 0.25:
+                    display_df.at[display_row.name, 'alert'] = '🚨 HIGH_ERROR'
+                else:
+                    display_df.at[display_row.name, 'alert'] = '✅ OK'
+            
+            # Format for display
+            log_columns = ['date', 'predicted', 'actual', 'mae', 'rmse', 'alert', 'model_type', 'prediction_timestamp']
+            available_columns = [col for col in log_columns if col in display_df.columns]
+            display_df = display_df[available_columns]
+            
+            formatted_df = display_df.copy()
+            if 'predicted' in formatted_df.columns:
+                formatted_df['predicted'] = formatted_df['predicted'].apply(lambda x: f"{x:,.0f}" if pd.notna(x) else "N/A")
+            if 'actual' in formatted_df.columns:
+                formatted_df['actual'] = formatted_df['actual'].apply(lambda x: f"{x:,.0f}" if pd.notna(x) else "N/A")
+            if 'mae' in formatted_df.columns:
+                formatted_df['mae'] = formatted_df['mae'].apply(lambda x: f"{x:,.0f}" if pd.notna(x) else "N/A")
+            if 'rmse' in formatted_df.columns:
+                formatted_df['rmse'] = formatted_df['rmse'].apply(lambda x: f"{x:,.0f}" if pd.notna(x) else "N/A")
+            
+            st.dataframe(formatted_df, use_container_width=True, height=280)
+        
+        # Update status
+        with status_placeholder.container():
+            current_date = row['date'].strftime('%Y-%m-%d')
+            
+            if high_error_detected:
+                st.error(f"🚨 HIGH ERROR DETECTED at {current_date}!")
+                error_percentage = (first_high_error['absolute_error'] / first_high_error['actual_sales']) * 100
+                st.warning(f"MAE ${first_high_error['absolute_error']:,.0f} is {error_percentage:.1f}% of actual value")
+                
+                if email_enabled:
+                    if email_sent:
+                        st.success(f"✅ Email alert sent to {recipient_email}")
+                    else:
+                        st.error("❌ Failed to send email alert")
+                
+                # Quick countdown before stopping
+                for i in range(2, 0, -1):
+                    status_placeholder.warning(f"🛑 Stopping in {i}...")
+                    time.sleep(0.5)
+                break
+            else:
+                st.success(f"🔄 Processing point {idx+1}/{total_rows}")
+                st.info(f"📅 Date: {current_date}")
+        
+        # Faster pause for quicker animation (0.8 seconds between points)
+        time.sleep(0.8)
+    
+    # Final state after animation completes
+    progress_bar.empty()
+    
+    if high_error_detected:
+        st.error("🎯 MONITORING COMPLETE - High Error Detected!")
+        st.warning("Processing stopped due to high prediction error.")
+        
+        # Show email status in final state
+        if email_enabled:
+            if email_sent:
+                st.success(f"📧 Email alert was sent to {recipient_email}")
+            else:
+                st.error("📧 Failed to send email alert")
     else:
-        st.error("No valid LightGBM model was trained.")
-
-
-
-
-
+        st.success("🎉 MONITORING COMPLETE - All Points Processed Successfully!")
+        st.balloons()
+        
+        # Show download options
+        st.subheader("📥 Download Complete Dataset")
+        col1, col2 = st.columns(2)
+        
+        download_df = animated_df.copy()
+        download_df = download_df.rename(columns={
+            'actual_sales': 'actual',
+            'absolute_error': 'mae',
+            'percentage_error': 'mape_percent'
+        })
+        download_df['date'] = download_df['date'].dt.strftime('%Y-%m-%d')
+        download_df['prediction_timestamp'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        download_df['rmse'] = (download_df['mae'] ** 2)
+        download_df['alert'] = 'OK'
+        
+        with col1:
+            csv_formatted = download_df.to_csv(index=False)
+            st.download_button(
+                label="📥 Download Formatted Data",
+                data=csv_formatted,
+                file_name=f"monitoring_data_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                mime="text/csv",
+            )
+        
+        with col2:
+            csv_raw = download_df.to_csv(index=False)
+            st.download_button(
+                label="📥 Download Raw Data",
+                data=csv_raw,
+                file_name=f"raw_monitoring_data_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                mime="text/csv",
+            )
