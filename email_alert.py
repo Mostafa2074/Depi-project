@@ -29,23 +29,25 @@ class EmailAlert:
     
 
     def __init__(self, env_path=".env"):
-        # Use Streamlit secrets for cloud deployment
-        try:
-            self.__sender_email = st.secrets.get("EMAIL", {}).get("SENDER_EMAIL", "")
-            self.__sender_password = st.secrets.get("EMAIL", {}).get("SENDER_PASSWORD", "")
-            
-            # Fallback to environment variables if secrets not available
-            if not self.__sender_email or not self.__sender_password:
-                self.__sender_email = os.getenv("SENDER_EMAIL")
-                self.__sender_password = os.getenv("SENDER_PASSWORD")
-        except Exception:
-            # If secrets are not configured, use environment variables
-            self.__sender_email = os.getenv("SENDER_EMAIL")
-            self.__sender_password = os.getenv("SENDER_PASSWORD")
+        # Load environment variables from .env file first
+        self._load_env_file(env_path)
+        
+        # Try environment variables first (from .env file)
+        self.__sender_email = os.getenv("SENDER_EMAIL")
+        self.__sender_password = os.getenv("SENDER_PASSWORD")
+        
+        # Fallback to Streamlit secrets only if environment variables are not set
+        if not self.__sender_email or not self.__sender_password:
+            try:
+                self.__sender_email = st.secrets.get("EMAIL", {}).get("SENDER_EMAIL", "")
+                self.__sender_password = st.secrets.get("EMAIL", {}).get("SENDER_PASSWORD", "")
+            except Exception:
+                # Streamlit secrets not available
+                pass
 
         # sender's email and password validation
         if not self.__sender_email or not self.__sender_password:
-            raise ValueError("Sender email and password must be set in environment variables or Streamlit secrets.")
+            raise ValueError("Sender email and password must be set in environment variables (.env file) or Streamlit secrets.")
         if not isinstance(self.__sender_email, str) or not isinstance(self.__sender_password, str):
             raise ValueError("Sender email and password must be strings.")
         if len(self.__sender_email) == 0 or len(self.__sender_password) == 0:
@@ -61,6 +63,27 @@ class EmailAlert:
         self.__server = None
 
         print("EmailAlert initialized successfully.")
+        print(f"Using email: {self.__sender_email}")
+
+    def _load_env_file(self, env_path):
+        """Load environment variables from .env file"""
+        try:
+            if os.path.exists(env_path):
+                print(f"Loading environment variables from {env_path}")
+                with open(env_path, 'r') as f:
+                    for line in f:
+                        line = line.strip()
+                        if line and not line.startswith('#') and '=' in line:
+                            key, value = line.split('=', 1)
+                            key = key.strip()
+                            value = value.strip()
+                            # Remove quotes if present
+                            if (value.startswith('"') and value.endswith('"')) or (value.startswith("'") and value.endswith("'")):
+                                value = value[1:-1]
+                            os.environ[key] = value
+                            print(f"Loaded: {key}={value[:4]}...")  # Show first 4 chars for security
+        except Exception as e:
+            print(f"Warning: Could not load .env file: {e}")
 
     # static method to get singleton instance
     @staticmethod
@@ -79,6 +102,11 @@ class EmailAlert:
                 print("Email server connected successfully.")
             except Exception as e:
                 print(f"Failed to connect to email server: {e}")
+                # More detailed error information
+                if "Authentication failed" in str(e):
+                    print("Authentication failed. Please check your email and password.")
+                elif "Connection refused" in str(e):
+                    print("Connection refused. Please check your network connection and SMTP settings.")
                 raise
 
     def send_email(self, email_content_instance):
@@ -113,6 +141,7 @@ class EmailAlert:
         try:
             self.__server.sendmail(self.__sender_email, email_content_instance.recipient, message.as_string())
             print(f"Email sent to {email_content_instance.recipient} successfully.")
+            return True
         except Exception as e:
             print(f"Failed to send email: {e}")
             # Re-establish connection on failure
