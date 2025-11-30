@@ -1,139 +1,292 @@
+# [file name]: predictions.py
+import streamlit as st
 import pandas as pd
 import numpy as np
-from datetime import datetime, timedelta
-import mlflow.pyfunc
-import streamlit as st
+from datetime import date, datetime, timedelta
+from typing import Dict, Optional
+from prediction_logger import PredictionLogger
 
-def batch_predict_mlflow(model, model_type, forecast_end_date, prophet_df=None):
-    """Generate batch predictions using MLflow model"""
+# Initialize the logger
+prediction_logger = PredictionLogger()
+
+def batch_predict_mlflow(model, model_type, end_date: date, prophet_df=None) -> pd.DataFrame:
+    """Generate batch predictions until a specific end date using MLflow model."""
     try:
-        if model_type == "arima":
-            return _arima_batch_predict(model, forecast_end_date, prophet_df)
-        elif model_type == "lightgbm":
-            return _lightgbm_batch_predict(model, forecast_end_date, prophet_df)
+        # Calculate periods based on end date
+        if prophet_df is not None and not prophet_df.empty:
+            last_data_date = prophet_df['ds'].max()
         else:
-            # Fallback to LightGBM for unknown model types
-            st.warning(f"Model type '{model_type}' not supported. Using LightGBM fallback.")
-            return _lightgbm_batch_predict(model, forecast_end_date, prophet_df)
-    except Exception as e:
-        st.error(f"Batch prediction error: {e}")
-        return pd.DataFrame()
-
-def _arima_batch_predict(model, forecast_end_date, prophet_df):
-    """ARIMA batch prediction"""
-    if prophet_df is None or prophet_df.empty:
-        st.error("ARIMA model requires historical data")
-        return pd.DataFrame()
-    
-    last_date = prophet_df['ds'].max()
-    end_date = pd.to_datetime(forecast_end_date)
-    periods = (end_date - last_date).days
-    
-    if periods <= 0:
-        st.error("Forecast end date must be after last historical date")
-        return pd.DataFrame()
-    
-    # Generate predictions
-    forecast = model.forecast(steps=periods)
-    
-    # Create date range
-    dates = pd.date_range(start=last_date + timedelta(days=1), periods=periods, freq='D')
-    
-    return pd.DataFrame({
-        'date': dates,
-        'prediction': forecast
-    })
-
-def _lightgbm_batch_predict(model, forecast_end_date, prophet_df):
-    """LightGBM batch prediction"""
-    if prophet_df is None or prophet_df.empty:
-        st.error("LightGBM model requires historical data")
-        return pd.DataFrame()
-    
-    last_date = prophet_df['ds'].max()
-    end_date = pd.to_datetime(forecast_end_date)
-    periods = (end_date - last_date).days
-    
-    if periods <= 0:
-        st.error("Forecast end date must be after last historical date")
-        return pd.DataFrame()
-    
-    # Create future dates
-    future_dates = pd.date_range(start=last_date + timedelta(days=1), periods=periods, freq='D')
-    
-    # Prepare features
-    future_df = pd.DataFrame({'ds': future_dates})
-    future_df['year'] = future_df['ds'].dt.year
-    future_df['month'] = future_df['ds'].dt.month
-    future_df['day'] = future_df['ds'].dt.day
-    future_df['dayofweek'] = future_df['ds'].dt.dayofweek
-    future_df['quarter'] = future_df['ds'].dt.quarter
-    future_df['dayofyear'] = future_df['ds'].dt.dayofyear
-    future_df['weekofyear'] = future_df['ds'].dt.isocalendar().week
-    
-    # Make predictions
-    predictions = model.predict(future_df.drop('ds', axis=1))
-    
-    return pd.DataFrame({
-        'date': future_dates,
-        'prediction': predictions
-    })
-
-def real_time_predict_mlflow(model, model_type, target_date, prophet_df=None):
-    """Generate real-time prediction for a specific date"""
-    try:
-        if model_type == "arima":
-            # For ARIMA, we need to specify this is 1 step ahead from last data point
-            prediction = model.forecast(steps=1)[0]
-        else:
-            # Default to LightGBM for all other model types
-            # Prepare features for the target date
-            features = pd.DataFrame({
-                'year': [target_date.year],
-                'month': [target_date.month],
-                'day': [target_date.day],
-                'dayofweek': [target_date.weekday()],
-                'quarter': [(target_date.month-1)//3 + 1],
-                'dayofyear': [target_date.timetuple().tm_yday],
-                'weekofyear': [target_date.isocalendar()[1]]
-            })
-            prediction = model.predict(features)[0]
+            last_data_date = pd.Timestamp(datetime.now().date())
         
-        return {
-            'date': target_date.strftime('%Y-%m-%d'),
-            'prediction': float(prediction),
-            'model_type': model_type,
-            'timestamp': datetime.now().isoformat()
-        }
+        end_date_dt = pd.Timestamp(end_date)
+        periods = (end_date_dt - last_data_date).days
         
-    except Exception as e:
-        return {'error': str(e)}
-
-def standardize_forecast_data(forecast_data, model_type):
-    """Standardize forecast data to common format"""
-    try:
-        if forecast_data.empty:
+        if periods <= 0:
+            st.warning("End date must be after the last data date.")
             return pd.DataFrame()
         
-        result = forecast_data.copy()
+        st.info(f"🔮 Generating {periods} days of predictions using {model_type} model...")
         
-        # Ensure we have the right column names
-        if 'ds' in result.columns and 'date' not in result.columns:
-            result = result.rename(columns={'ds': 'date'})
+        if model_type == "prophet":
+            # For Prophet models, create future dataframe with ds column only
+            future = pd.DataFrame({
+                'ds': pd.date_range(start=last_data_date + timedelta(days=1), 
+                                  periods=periods, freq='D')
+            })
+            
+            st.info("📊 Using Prophet model for forecasting...")
+            forecast = model.predict(future)
+            
+            # Create the result dataframe
+            result_df = pd.DataFrame({
+                'date': forecast['ds'],
+                'prediction': forecast['yhat']
+            })
+            
+            # Log the predictions - ONLY TO MLFLOW
+            log_count = prediction_logger.log_batch_prediction(
+                forecast_data=result_df,
+                actual_data=prophet_df,
+                model_type=model_type,
+                forecast_end_date=end_date
+            )
+            
+            st.info(f"📊 Logged {log_count} predictions to MLflow")
+            st.success("✅ Predictions successfully generated and logged to MLflow")
+            
+            return result_df
+            
+        elif model_type == "arima":
+            # For ARIMA models - create proper input format
+            future_dates = pd.date_range(start=last_data_date + timedelta(days=1), periods=periods, freq='D')
+            
+            # Create input with date information that matches the wrapper's expected schema
+            future_df = pd.DataFrame({
+                'ds': future_dates,
+                'year': future_dates.year.astype('int32'),
+                'month': future_dates.month.astype('int32'),
+                'day': future_dates.day.astype('int32')
+            })
+            
+            # Get predictions
+            st.info("📊 Using ARIMA model for forecasting...")
+            predictions_df = model.predict(future_df)
+            
+            # Create forecast DataFrame
+            result_df = pd.DataFrame({
+                'date': future_dates,
+                'prediction': predictions_df['prediction'].values if 'prediction' in predictions_df.columns else predictions_df.iloc[:, 0].values
+            })
+            
+            # Log the predictions - ONLY TO MLFLOW
+            log_count = prediction_logger.log_batch_prediction(
+                forecast_data=result_df,
+                actual_data=prophet_df,
+                model_type=model_type,
+                forecast_end_date=end_date
+            )
+            
+            st.info(f"📊 Logged {log_count} predictions to MLflow")
+            st.success("✅ Predictions successfully generated and logged to MLflow")
+            
+            return result_df
+            
+        elif model_type == "lightgbm":
+            # For LightGBM models - create feature dataframe with ALL required features
+            future_dates = pd.date_range(start=last_data_date + timedelta(days=1), periods=periods, freq='D')
+            
+            # Create input with ALL feature columns that the model expects
+            future_df = pd.DataFrame({
+                'ds': future_dates,
+                'year': future_dates.year.astype('float64'),
+                'month': future_dates.month.astype('float64'),
+                'day': future_dates.day.astype('float64'),
+                'dayofweek': future_dates.dayofweek.astype('float64'),
+                'quarter': future_dates.quarter.astype('float64'),
+                'dayofyear': future_dates.dayofyear.astype('float64'),
+                'weekofyear': future_dates.isocalendar().week.astype('float64')
+            })
+            
+            try:
+                # Get predictions
+                st.info("📊 Using LightGBM model for forecasting...")
+                predictions_df = model.predict(future_df)
+                
+                result_df = pd.DataFrame({
+                    'date': future_dates,
+                    'prediction': predictions_df['prediction'].values
+                })
+                
+                # Log the predictions - ONLY TO MLFLOW
+                log_count = prediction_logger.log_batch_prediction(
+                    forecast_data=result_df,
+                    actual_data=prophet_df,
+                    model_type=model_type,
+                    forecast_end_date=end_date
+                )
+                
+                st.info(f"📊 Logged {log_count} predictions to MLflow")
+                st.success("✅ Predictions successfully generated and logged to MLflow")
+                
+                return result_df
+                
+            except Exception as e:
+                st.error(f"LightGBM prediction failed: {e}")
+                return pd.DataFrame()
+            
+        else:
+            st.error(f"Unsupported model type: {model_type}")
+            return pd.DataFrame()
+            
+    except Exception as e:
+        st.error(f"Error in batch prediction: {e}")
+        import traceback
+        st.error(f"Detailed error: {traceback.format_exc()}")
+        return pd.DataFrame()
+    
+def real_time_predict_mlflow(model, model_type, target_date: datetime, context_data: Optional[Dict] = None, prophet_df=None) -> Dict:
+    """Generate prediction for a single specific date using MLflow model."""
+    try:
+        target_date_dt = pd.to_datetime(target_date)
         
-        if 'yhat' in result.columns and 'prediction' not in result.columns:
-            result = result.rename(columns={'yhat': 'prediction'})
-        
-        # Ensure date is datetime
-        if 'date' in result.columns:
-            result['date'] = pd.to_datetime(result['date'])
-        
-        # Select only necessary columns
-        required_cols = ['date', 'prediction']
-        available_cols = [col for col in required_cols if col in result.columns]
-        
-        return result[available_cols]
+        if model_type == "prophet":
+            # For Prophet - simple date input
+            future_df = pd.DataFrame({'ds': [target_date_dt]})
+            forecast = model.predict(future_df)
+            
+            result = {
+                'date': target_date,
+                'prediction': float(forecast['yhat'].iloc[0]),
+                'model_type': model_type,
+                'timestamp': datetime.now().isoformat()
+            }
+            
+        elif model_type == "arima":
+            # For ARIMA, we need to generate a sequence of predictions and take the last one
+            if prophet_df is not None and not prophet_df.empty:
+                last_data_date = prophet_df['ds'].max()
+            else:
+                last_data_date = pd.Timestamp(datetime.now().date())
+            
+            days_ahead = (target_date_dt - last_data_date).days
+            
+            if days_ahead <= 0:
+                result = {
+                    'date': target_date,
+                    'prediction': 0,
+                    'model_type': model_type,
+                    'error': 'Target date must be after the last training data date',
+                    'timestamp': datetime.now().isoformat()
+                }
+            else:
+                # Create input for the required number of periods
+                future_dates = pd.date_range(start=last_data_date + timedelta(days=1), periods=days_ahead, freq='D')
+                
+                future_df = pd.DataFrame({
+                    'ds': future_dates,
+                    'year': future_dates.year.astype('int32'),
+                    'month': future_dates.month.astype('int32'),
+                    'day': future_dates.day.astype('int32')
+                })
+                
+                # Get predictions for all days up to the target date
+                predictions_df = model.predict(future_df)
+                
+                # Take the last prediction (the one for our target date)
+                if 'prediction' in predictions_df.columns:
+                    prediction_value = float(predictions_df['prediction'].iloc[-1])
+                else:
+                    prediction_value = float(predictions_df.iloc[-1, 0])
+                
+                result = {
+                    'date': target_date,
+                    'prediction': prediction_value,
+                    'model_type': model_type,
+                    'timestamp': datetime.now().isoformat()
+                }
+            
+        elif model_type == "lightgbm":
+            # LightGBM single prediction - create ALL required features
+            lightgbm_input = pd.DataFrame({
+                'ds': [target_date_dt],
+                'year': np.array([target_date_dt.year], dtype='float64'),
+                'month': np.array([target_date_dt.month], dtype='float64'),
+                'day': np.array([target_date_dt.day], dtype='float64'),
+                'dayofweek': np.array([target_date_dt.dayofweek], dtype='float64'),
+                'quarter': np.array([target_date_dt.quarter], dtype='float64'),
+                'dayofyear': np.array([target_date_dt.dayofyear], dtype='float64'),
+                'weekofyear': np.array([target_date_dt.isocalendar().week], dtype='float64')
+            })
+            
+            prediction_df = model.predict(lightgbm_input)
+            
+            result = {
+                'date': target_date,
+                'prediction': float(prediction_df['prediction'].iloc[0]),
+                'model_type': model_type,
+                'timestamp': datetime.now().isoformat()
+            }
+            
+        else:
+            result = {
+                'date': target_date,
+                'prediction': None,
+                'model_type': model_type,
+                'error': 'Unsupported model type',
+                'timestamp': datetime.now().isoformat()
+            }
+            
+        return result
         
     except Exception as e:
-        st.error(f"Error standardizing forecast data: {e}")
+        return {
+            'date': target_date,
+            'prediction': None,
+            'model_type': model_type,
+            'error': str(e),
+            'timestamp': datetime.now().isoformat()
+        }
+
+def standardize_forecast_data(forecast_data, model_type):
+    """Standardize forecast data to have consistent column names."""
+    if forecast_data is None or forecast_data.empty:
         return pd.DataFrame()
+    
+    # Create a copy to avoid modifying original
+    result = forecast_data.copy()
+    
+    # Handle different column naming conventions
+    if 'ds' in result.columns and 'yhat' in result.columns:
+        # Prophet format
+        result = result.rename(columns={'ds': 'date', 'yhat': 'prediction'})
+    elif 'prediction' in result.columns and 'date' not in result.columns:
+        # Add date column if missing
+        if 'ds' in result.columns:
+            result = result.rename(columns={'ds': 'date'})
+        elif len(result) > 0:
+            # Create date range if no date column exists
+            result['date'] = pd.date_range(start=datetime.now(), periods=len(result), freq='D')
+    
+    # Ensure we have the required columns
+    if 'date' not in result.columns:
+        st.error(f"Missing 'date' column in {model_type} forecast data")
+        return pd.DataFrame()
+        
+    if 'prediction' not in result.columns:
+        # Look for alternative prediction column names
+        possible_pred_cols = ['yhat', 'forecast', 'y_pred', 'sales_pred']
+        for col in possible_pred_cols:
+            if col in result.columns:
+                result = result.rename(columns={col: 'prediction'})
+                break
+        
+        if 'prediction' not in result.columns and len(result.columns) > 1:
+            # Use the first numeric column as prediction
+            numeric_cols = result.select_dtypes(include=[np.number]).columns
+            if len(numeric_cols) > 0:
+                result = result.rename(columns={numeric_cols[0]: 'prediction'})
+            else:
+                st.error(f"No prediction column found in {model_type} forecast data")
+                return pd.DataFrame()
+    
+    return result[['date', 'prediction']]
