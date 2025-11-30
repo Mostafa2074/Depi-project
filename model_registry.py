@@ -17,7 +17,7 @@ def load_production_model_from_registry(model_name="BestForecastModels", stage="
         # Clear cache to ensure we get fresh data
         st.cache_resource.clear()
         
-        st.sidebar.info("🔄 Checking for production models...")
+        # st.sidebar.info("🔄 Checking for production models...")
         
         # Get all model versions
         model_versions = client.search_model_versions(f"name='{model_name}'")
@@ -28,7 +28,7 @@ def load_production_model_from_registry(model_name="BestForecastModels", stage="
             return None
         
         # Debug: Show all available models and their stages
-        st.sidebar.info(f"📋 Found {len(model_versions)} model versions:")
+        # st.sidebar.info(f"📋 Found {len(model_versions)} model versions:")
         for mv in model_versions:
             st.sidebar.write(f"  - Version {mv.version}: {mv.current_stage}")
             
@@ -88,7 +88,7 @@ def load_model_robustly(model_uri, client, model_version):
 def try_direct_loading(model_uri, client, model_version):
     """Strategy 1: Try direct loading."""
     try:
-        st.sidebar.info("🔄 Attempting direct model loading...")
+        # st.sidebar.info("🔄 Attempting direct model loading...")
         return mlflow.pyfunc.load_model(model_uri)
     except Exception as e:
         st.sidebar.warning(f"⚠️ Direct loading failed: {e}")
@@ -167,8 +167,8 @@ def get_model_type_from_registry(model_name="BestForecastModels", stage="Product
             model_type = run.data.tags.get("model_type", "unknown")
             
             # Debug information
-            st.sidebar.info(f"🔍 Detected model type: {model_type}")
-            st.sidebar.info(f"📝 Run tags: {run.data.tags}")
+            # st.sidebar.info(f"🔍 Detected model type: {model_type}")
+            # st.sidebar.info(f"📝 Run tags: {run.data.tags}")
             
             return model_type
         return "unknown"
@@ -288,4 +288,5 @@ def check_registry_status():
                 
     except Exception as e:
         st.sidebar.error(f"❌ Error checking registry status: {e}")
+
 
