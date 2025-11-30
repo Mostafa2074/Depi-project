@@ -7,9 +7,12 @@ import sys
 project_root = os.path.dirname(os.path.abspath(__file__))
 os.chdir(project_root)
 
-# Configure MLflow to use relative paths before importing MLflow
-os.environ['MLFLOW_ARTIFACT_ROOT'] = 'file:./mlruns'
-os.environ['MLFLOW_TRACKING_URI'] = 'sqlite:///mlflow.db'
+# Configure MLflow to use file store instead of SQLite for Streamlit Cloud compatibility
+os.environ['MLFLOW_ARTIFACT_ROOT'] = './mlruns'
+os.environ['MLFLOW_TRACKING_URI'] = './mlruns'  # Use file store instead of SQLite
+
+# Create necessary directories
+os.makedirs('./mlruns', exist_ok=True)
 
 # Now import other modules
 from data_loader import load_data
@@ -32,7 +35,9 @@ st.set_page_config(
 # MLflow Setup - Import after environment variables are set
 import mlflow
 from mlflow.tracking import MlflowClient
-mlflow.set_tracking_uri("sqlite:///mlflow.db")
+
+# Use file store instead of SQLite for Streamlit Cloud compatibility
+mlflow.set_tracking_uri("./mlruns")
 
 # ============================================================================
 # MAIN ENTRY POINT
@@ -67,8 +72,6 @@ def setup_mlflow_utilities():
             st.sidebar.error(f"Error resetting MLflow: {e}")
     
     st.sidebar.markdown("---")
-
-# In main.py, update the data loading section:
 
 def main():
     """Main application entry point"""
@@ -116,7 +119,7 @@ def main():
     # Main application routing
     if "Dashboard" in app_mode:
         run_dashboard(train, min_date, max_date, sort_state)
-    elif "Forecast Engine" in app_mode:
+    elif "Forecast Engine" in appmode:
         run_forecast_app(model, prophet_df, model_type)
     elif "Monitoring" in app_mode:
         run_monitoring_app()
@@ -131,26 +134,6 @@ def main():
         f"- Artifact Root: `{os.environ.get('MLFLOW_ARTIFACT_ROOT', 'Not set')}`\n"
         f"- Production Model: `{model_type if model else 'None'}`"
     )
-# Optional: Add to main.py for initial setup
-def check_data_files():
-    """Check if required data files exist"""
-    paths = get_model_paths()
-    
-    if not os.path.exists(paths['data_zip']):
-        st.sidebar.warning("⚠️ Data.zip not found")
-        
-        with st.sidebar.expander("📁 Upload Data.zip"):
-            st.info("Please upload your Data.zip file containing the training data")
-            uploaded_zip = st.file_uploader("Upload Data.zip", type="zip", key="data_zip_uploader")
-            
-            if uploaded_zip is not None:
-                # Save the uploaded file
-                with open(paths['data_zip'], "wb") as f:
-                    f.write(uploaded_zip.getbuffer())
-                st.success("✅ Data.zip uploaded successfully!")
-                st.rerun()
 
 if __name__ == '__main__':
     main()
-
-
