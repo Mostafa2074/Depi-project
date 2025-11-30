@@ -229,7 +229,7 @@ def display_mlflow_forecast_results(forecast_data, prophet_df, model_type, end_d
         display_df = display_df.rename(columns={'date': 'Date', 'prediction': 'Predicted Sales'})
         st.dataframe(display_df, use_container_width=True, height=300)
 
-    # 3. Interactive Chart
+    # 3. Interactive Chart (UPDATED with improvements from forecast_ui.py)
     st.subheader("📈 Forecast Visualization")
     
     fig = go.Figure()
@@ -243,9 +243,9 @@ def display_mlflow_forecast_results(forecast_data, prophet_df, model_type, end_d
             y=recent_history['y'],
             mode='lines+markers',
             name='Historical Sales',
-            line=dict(color='#1f77b4', width=3),
-            marker=dict(size=4, color='#1f77b4'),
-            opacity=0.8
+            line=dict(color='#1abc9c', width=2),  # Color from forecast_ui.py
+            marker=dict(size=4, color='#1abc9c'),
+            opacity=0.4  # Fade effect from forecast_ui.py to distinguish history
         ))
 
     # Forecast Line
@@ -255,14 +255,13 @@ def display_mlflow_forecast_results(forecast_data, prophet_df, model_type, end_d
             y=standardized_data['prediction'],
             mode='lines+markers',
             name=f'{model_type} Forecast',
-            line=dict(color='#ff7f0e', width=3, dash='dash'),
-            marker=dict(size=5, color='#ff7f0e')
+            line=dict(color='#1abc9c', width=2),  # Consistent color from forecast_ui.py
+            marker=dict(size=4)
         ))
 
-    # Add vertical line separating history and forecast
+    # Add vertical line separating history and forecast (UPDATED style)
     if not prophet_df.empty and not standardized_data.empty:
         last_historical_date = prophet_df['ds'].max()
-        first_forecast_date = standardized_data['date'].min()
 
         fig.add_shape(
             type="line",
@@ -272,19 +271,17 @@ def display_mlflow_forecast_results(forecast_data, prophet_df, model_type, end_d
             y1=1,
             xref="x",
             yref="paper",
-            line=dict(color="red", width=3, dash="dot")
+            line=dict(color="red", width=2, dash="dash")  # Simpler style from forecast_ui.py
         )
 
         fig.add_annotation(
             x=last_historical_date,
-            y=0.95,
+            y=1,
             xref="x",
             yref="paper",
             text="Forecast Start",
-            showarrow=True,
-            arrowhead=2,
-            bgcolor="red",
-            font=dict(color="white")
+            showarrow=False,
+            yshift=10  # Cleaner annotation from forecast_ui.py
         )
 
     fig.update_layout(
