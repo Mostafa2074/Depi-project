@@ -108,13 +108,18 @@ def reset_mlflow_completely():
     except Exception as e:
         st.error(f"Error resetting MLflow: {e}")
 
+# In training.py, update the MLflow setup:
+
 def setup_mlflow_training():
     """Main MLflow training interface"""
     st.title("📊 Multi-Model Forecast Trainer with MLflow & Model Registry")
     
-    # Configure MLflow for relative paths
-    os.environ['MLFLOW_ARTIFACT_ROOT'] = 'file:./mlruns'
-    mlflow.set_tracking_uri("sqlite:///mlflow.db")
+    # Configure MLflow for file store (Streamlit Cloud compatible)
+    os.environ['MLFLOW_ARTIFACT_ROOT'] = './mlruns'
+    mlflow.set_tracking_uri("./mlruns")  # Use file store
+    
+    # Ensure mlruns directory exists
+    os.makedirs("./mlruns", exist_ok=True)
     
     # GET PATHS DYNAMICALLY
     paths = get_model_paths()
@@ -125,6 +130,8 @@ def setup_mlflow_training():
     prophet_model_path = paths['prophet_model']
     arima_model_path = paths['arima_model']
     lgb_model_path = paths['lightgbm_model']
+
+    # Rest of the function remains the same...
 
     # 1️⃣ Load Dataset from model_dataset.csv
     st.subheader("1️⃣ Load Dataset for Training")
@@ -726,4 +733,5 @@ def train_lightgbm_model(lgb_param_grid, lgb_model_path, models_folder):
         st.info("Model saved locally and registered in MLflow. You can now use it in the Forecast Engine.")
     else:
         st.error("No valid LightGBM model was trained.")
+
 
