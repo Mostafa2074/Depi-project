@@ -23,26 +23,26 @@ def load_data():
                 file_list = zip_ref.namelist()
                 st.info(f"Files in zip: {file_list}")
                 
-                # Look for train.csv or similar files
-                train_file = None
+                # Look for Data.csv (changed from train.csv)
+                data_file = None
                 for file in file_list:
-                    if 'train' in file.lower() and file.endswith('.csv'):
-                        train_file = file
+                    if file.lower() == 'data.csv' or file.lower().endswith('/data.csv'):
+                        data_file = file
                         break
                 
-                if train_file:
-                    # Extract and read the train file
-                    with zip_ref.open(train_file) as f:
+                if data_file:
+                    # Extract and read the Data.csv file
+                    with zip_ref.open(data_file) as f:
                         train = pd.read_csv(f)
                     
                     # Try to parse date column if it exists
                     if 'date' in train.columns:
                         train['date'] = pd.to_datetime(train['date'])
                     
-                    st.success(f"✅ Successfully loaded data from {train_file} in Data.zip")
+                    st.success(f"✅ Successfully loaded data from {data_file} in Data.zip")
                     
                 else:
-                    st.error("No train.csv file found in Data.zip")
+                    st.error("No Data.csv file found in Data.zip")
                     st.info("Available files: " + ", ".join(file_list))
                     return pd.DataFrame(), None, None, pd.Series(), pd.DataFrame()
                     
