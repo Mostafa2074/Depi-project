@@ -28,39 +28,40 @@ class EmailAlert:
         return cls._instance
     
 
+    class EmailAlert:
+    # ... existing code ...
+    
     def __init__(self, env_path=".env"):
-        # Use Streamlit secrets for cloud deployment
+        # Use Streamlit secrets as primary source
         try:
             self.__sender_email = st.secrets.get("EMAIL", {}).get("SENDER_EMAIL", "")
             self.__sender_password = st.secrets.get("EMAIL", {}).get("SENDER_PASSWORD", "")
             
-            # Fallback to environment variables if secrets not available
+            # Fallback to environment variables ONLY if secrets not available
             if not self.__sender_email or not self.__sender_password:
-                self.__sender_email = os.getenv("SENDER_EMAIL")
-                self.__sender_password = os.getenv("SENDER_PASSWORD")
-        except Exception:
-            # If secrets are not configured, use environment variables
-            self.__sender_email = os.getenv("SENDER_EMAIL")
-            self.__sender_password = os.getenv("SENDER_PASSWORD")
+                st.warning("⚠️ Using environment variables as fallback")
+                self.__sender_email = os.getenv("SENDER_EMAIL", "")
+                self.__sender_password = os.getenv("SENDER_PASSWORD", "")
+                
+        except Exception as e:
+            st.error(f"❌ Error loading email configuration: {e}")
+            # Fallback to environment variables
+            self.__sender_email = os.getenv("SENDER_EMAIL", "")
+            self.__sender_password = os.getenv("SENDER_PASSWORD", "")
 
-        # sender's email and password validation
+        # Validation
         if not self.__sender_email or not self.__sender_password:
-            raise ValueError("Sender email and password must be set in environment variables or Streamlit secrets.")
-        if not isinstance(self.__sender_email, str) or not isinstance(self.__sender_password, str):
-            raise ValueError("Sender email and password must be strings.")
-        if len(self.__sender_email) == 0 or len(self.__sender_password) == 0:
-            raise ValueError("Sender email and password cannot be empty.")
-        if re.match(r"[^@]+@[^@]+\.[^@]+", self.__sender_email) is None:
-            raise ValueError("Invalid sender email address format.")
-    
-        
+            st.error("❌ Email credentials not found. Please configure .streamlit/secrets.toml")
+            raise ValueError("Email credentials not configured")
+            
+        if not re.match(r"[^@]+@[^@]+\.[^@]+", self.__sender_email):
+            raise ValueError("Invalid sender email address format")
+
         self.__stmp_server = "smtp.gmail.com"
         self.__smtp_port = 587
-
-        # Initialize server connection (will be established when needed)
         self.__server = None
-
-        print("EmailAlert initialized successfully.")
+        
+        st.success("✅ Email alert system initialized successfully!")
 
     # static method to get singleton instance
     @staticmethod
@@ -127,3 +128,4 @@ class EmailAlert:
                 self.__server.quit()
             except:
                 pass
+
