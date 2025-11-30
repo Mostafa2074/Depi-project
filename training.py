@@ -4,6 +4,8 @@ import pandas as pd
 import pickle
 import os
 import shutil
+import zipfile
+import tempfile
 from prophet import Prophet
 from sklearn.metrics import mean_squared_error, mean_absolute_error
 from sklearn.model_selection import train_test_split, RandomizedSearchCV
@@ -12,9 +14,63 @@ from mlflow.models.signature import infer_signature
 import lightgbm as lgb
 from statsmodels.tsa.arima.model import ARIMA
 from itertools import product
-from model_wrappers import ProphetModelWrapper, ARIMAModelWrapper, LightGBMModelWrapper
+import numpy as np
 from project_paths import get_model_paths
 from mlflow.tracking import MlflowClient
+
+# Import wrapper classes (defined inline to avoid import issues)
+import mlflow.pyfunc
+
+class ProphetModelWrapper(mlflow.pyfunc.PythonModel):
+    def __init__(self, model):
+        self.model = model
+        
+    def predict(self, context, model_input):
+        full_forecast = self.model.predict(model_input)
+        return full_forecast[['ds', 'yhat']]
+
+class ARIMAModelWrapper(mlflow.pyfunc.PythonModel):
+    def __init__(self, model):
+        self.model = model
+        
+    def predict(self, context, model_input):
+        try:
+            periods = len(model_input)
+            predictions = self.model.predict(start=0, end=periods-1)
+            if isinstance(predictions, pd.Series):
+                return pd.DataFrame({'prediction': predictions.values})
+            else:
+                return pd.DataFrame({'prediction': predictions})
+        except Exception:
+            return pd.DataFrame({'prediction': [0] * len(model_input)})
+
+class LightGBMModelWrapper(mlflow.pyfunc.PythonModel):
+    def __init__(self, model, feature_columns=None):
+        self.model = model
+        self.feature_columns = feature_columns or ['year', 'month', 'day', 'dayofweek', 'quarter', 'dayofyear', 'weekofyear']
+        
+    def predict(self, context, model_input):
+        try:
+            if 'ds' in model_input.columns:
+                dates = pd.to_datetime(model_input['ds'])
+                features_df = pd.DataFrame({
+                    'year': dates.dt.year.astype('float64'),
+                    'month': dates.dt.month.astype('float64'),
+                    'day': dates.dt.day.astype('float64'),
+                    'dayofweek': dates.dt.dayofweek.astype('float64'),
+                    'quarter': dates.dt.quarter.astype('float64'),
+                    'dayofyear': dates.dt.dayofyear.astype('float64'),
+                    'weekofyear': dates.dt.isocalendar().week.astype('float64')
+                })
+            else:
+                features_df = model_input[self.feature_columns].copy()
+                for col in features_df.columns:
+                    features_df[col] = features_df[col].astype('float64')
+            
+            predictions = self.model.predict(features_df)
+            return pd.DataFrame({'prediction': predictions})
+        except Exception:
+            return pd.DataFrame({'prediction': [0] * len(model_input)})
 
 # Constants
 PROPHET_REGISTRY_NAME = "BestForecastModels"
@@ -64,92 +120,145 @@ def setup_mlflow_training():
     # GET PATHS DYNAMICALLY
     paths = get_model_paths()
     
-    # Paths - USE EXISTING MLFLOW PROJECT STRUCTURE
-    dataset_path = paths['dataset']
+    # Use Data.zip as primary data source
+    data_zip_path = paths['data_zip']
     models_folder = paths['models_folder']
     prophet_model_path = paths['prophet_model']
     arima_model_path = paths['arima_model']
     lgb_model_path = paths['lightgbm_model']
 
-    # 1️⃣ Load Dataset
-    st.subheader("1️⃣ Load Dataset")
+    # 1️⃣ Load Dataset from Data.zip
+    st.subheader("1️⃣ Load Dataset from Data.zip")
     
-    # Use file uploader as fallback for cloud deployment
-    if not os.path.exists(dataset_path):
-        st.info("Upload dataset CSV file for training:")
-        uploaded_file = st.file_uploader("Upload model_dataset.csv", type="csv")
-        if uploaded_file is not None:
-            df = pd.read_csv(uploaded_file, parse_dates=["date"])
-            st.success("✅ Dataset loaded from uploaded file")
-        else:
-            st.error("Please upload model_dataset.csv file to proceed with training")
+    # Check if Data.zip exists
+    if not os.path.exists(data_zip_path):
+        st.error(f"❌ Data.zip not found at {data_zip_path}")
+        st.info("Please ensure Data.zip is in your project directory with the training data")
+        
+        # Provide upload option
+        st.info("Upload your Data.zip file:")
+        uploaded_zip = st.file_uploader("Upload Data.zip", type="zip", key="training_data_uploader")
+        if uploaded_zip is not None:
+            # Save the uploaded file
+            with open(data_zip_path, "wb") as f:
+                f.write(uploaded_zip.getbuffer())
+            st.success("✅ Data.zip uploaded successfully! Please refresh the page.")
             return
-    else:
-        df = pd.read_csv(dataset_path, parse_dates=["date"])
-        st.success(f"✅ Dataset loaded from {dataset_path}")
+        else:
+            return
     
-    if 'df' in locals():
-        st.write("Dataset Preview:")
-        st.dataframe(df.head())
+    try:
+        # Extract and load data from zip
+        with zipfile.ZipFile(data_zip_path, 'r') as zip_ref:
+            # List files in the zip
+            file_list = zip_ref.namelist()
+            st.info(f"Files in Data.zip: {', '.join(file_list)}")
+            
+            # Look for train.csv
+            train_file = None
+            for file in file_list:
+                if 'train' in file.lower() and file.endswith('.csv'):
+                    train_file = file
+                    break
+            
+            if not train_file:
+                st.error("❌ No train.csv found in Data.zip")
+                st.info("Please ensure your Data.zip contains a train.csv file")
+                return
+                
+            # Extract and read the train file
+            with zip_ref.open(train_file) as f:
+                df = pd.read_csv(f)
+            
+            st.success(f"✅ Successfully loaded data from {train_file} in Data.zip")
+            
+            # Try to parse date column if it exists
+            if 'date' in df.columns:
+                df['date'] = pd.to_datetime(df['date'])
+                st.info(f"📅 Data range: {df['date'].min().date()} to {df['date'].max().date()}")
         
-        # Prepare data for Prophet
-        prophet_df = df.rename(columns={"date": "ds", "sales": "y"})
-        prophet_input_example = prophet_df[['ds']].head(5)
-        
-        # Prepare data for ARIMA
-        series = df.set_index("date")["sales"]
-        arima_input_example = pd.DataFrame({
-            'ds': series.head(10).index,
-            'year': series.head(10).index.year.astype('int32'),
-            'month': series.head(10).index.month.astype('int32'),
-            'day': series.head(10).index.day.astype('int32')
-        })
-        
-        # Feature Engineering for LightGBM
-        df['year'] = df['date'].dt.year.astype('float64')
-        df['month'] = df['date'].dt.month.astype('float64')
-        df['day'] = df['date'].dt.day.astype('float64')
-        df['dayofweek'] = df['date'].dt.dayofweek.astype('float64')
-        df['quarter'] = df['date'].dt.quarter.astype('float64')
-        df['dayofyear'] = df['date'].dt.dayofyear.astype('float64')
-        df['weekofyear'] = df['date'].dt.isocalendar().week.astype('float64')
-        
-        # Prepare features and target for LightGBM
-        feature_columns = ['year', 'month', 'day', 'dayofweek', 'quarter', 'dayofyear', 'weekofyear']
-        X = df[feature_columns]
-        y = df['sales']
-
-        # Train/Test Split for Prophet
-        prophet_train_df, prophet_test_df = train_test_split(prophet_df, test_size=0.2, shuffle=False)
-        
-        # Train/Test Split for ARIMA
-        train_size = int(len(series) * 0.8)
-        arima_train_series = series[:train_size]
-        arima_test_series = series[train_size:]
-        
-        # Train/Test Split for LightGBM
-        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, shuffle=False)
-        
-        st.write(f"Training rows: {len(prophet_train_df)}, Testing rows: {len(prophet_test_df)}")
-        
-        # Store variables in session state
-        st.session_state.mlflow_df = df
-        st.session_state.mlflow_prophet_df = prophet_df
-        st.session_state.mlflow_prophet_train_df = prophet_train_df
-        st.session_state.mlflow_prophet_test_df = prophet_test_df
-        st.session_state.mlflow_series = series
-        st.session_state.mlflow_arima_train_series = arima_train_series
-        st.session_state.mlflow_arima_test_series = arima_test_series
-        st.session_state.mlflow_X = X
-        st.session_state.mlflow_y = y
-        st.session_state.mlflow_X_train = X_train
-        st.session_state.mlflow_X_test = X_test
-        st.session_state.mlflow_y_train = y_train
-        st.session_state.mlflow_y_test = y_test
-        
-    else:
-        st.error(f"Dataset not found: {dataset_path}")
+    except Exception as e:
+        st.error(f"❌ Error loading data from Data.zip: {e}")
         return
+
+    # Display dataset info
+    st.write("Dataset Preview:")
+    st.dataframe(df.head())
+    
+    st.write("Dataset Info:")
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("Total Records", f"{len(df):,}")
+    with col2:
+        st.metric("Columns", len(df.columns))
+    with col3:
+        st.metric("Date Range", f"{df['date'].min().date()} to {df['date'].max().date()}")
+    
+    # Check required columns
+    if 'sales' not in df.columns:
+        st.error("❌ 'sales' column not found in dataset")
+        st.info("Available columns: " + ", ".join(df.columns))
+        return
+        
+    if 'date' not in df.columns:
+        st.error("❌ 'date' column not found in dataset")
+        return
+
+    # Prepare data for Prophet
+    prophet_df = df.rename(columns={"date": "ds", "sales": "y"})[['ds', 'y']]
+    prophet_input_example = prophet_df[['ds']].head(5)
+    
+    # Prepare data for ARIMA
+    series = df.set_index("date")["sales"].sort_index()
+    arima_input_example = pd.DataFrame({
+        'ds': series.head(10).index,
+        'year': series.head(10).index.year.astype('int32'),
+        'month': series.head(10).index.month.astype('int32'),
+        'day': series.head(10).index.day.astype('int32')
+    })
+    
+    # Feature Engineering for LightGBM
+    df_features = df.copy()
+    df_features['year'] = df_features['date'].dt.year.astype('float64')
+    df_features['month'] = df_features['date'].dt.month.astype('float64')
+    df_features['day'] = df_features['date'].dt.day.astype('float64')
+    df_features['dayofweek'] = df_features['date'].dt.dayofweek.astype('float64')
+    df_features['quarter'] = df_features['date'].dt.quarter.astype('float64')
+    df_features['dayofyear'] = df_features['date'].dt.dayofyear.astype('float64')
+    df_features['weekofyear'] = df_features['date'].dt.isocalendar().week.astype('float64')
+    
+    # Prepare features and target for LightGBM
+    feature_columns = ['year', 'month', 'day', 'dayofweek', 'quarter', 'dayofyear', 'weekofyear']
+    X = df_features[feature_columns]
+    y = df_features['sales']
+
+    # Train/Test Split for Prophet
+    prophet_train_df, prophet_test_df = train_test_split(prophet_df, test_size=0.2, shuffle=False)
+    
+    # Train/Test Split for ARIMA
+    train_size = int(len(series) * 0.8)
+    arima_train_series = series[:train_size]
+    arima_test_series = series[train_size:]
+    
+    # Train/Test Split for LightGBM
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, shuffle=False)
+    
+    st.write(f"Training rows: {len(prophet_train_df)}, Testing rows: {len(prophet_test_df)}")
+    
+    # Store variables in session state
+    st.session_state.mlflow_df = df
+    st.session_state.mlflow_prophet_df = prophet_df
+    st.session_state.mlflow_prophet_train_df = prophet_train_df
+    st.session_state.mlflow_prophet_test_df = prophet_test_df
+    st.session_state.mlflow_series = series
+    st.session_state.mlflow_arima_train_series = arima_train_series
+    st.session_state.mlflow_arima_test_series = arima_test_series
+    st.session_state.mlflow_X = X
+    st.session_state.mlflow_y = y
+    st.session_state.mlflow_X_train = X_train
+    st.session_state.mlflow_X_test = X_test
+    st.session_state.mlflow_y_train = y_train
+    st.session_state.mlflow_y_test = y_test
 
     # 2️⃣ Load Pre-trained Models (Optional)
     st.subheader("2️⃣ Load Pre-trained Models (Optional)")
@@ -185,41 +294,44 @@ def setup_mlflow_training():
     # 3️⃣ Prophet Model Training
     st.subheader("3️⃣ Prophet Model Training")
     prophet_param_grid = {
-        "changepoint_prior_scale": [0.001],
-        "seasonality_prior_scale": [0.1],
-        "holidays_prior_scale": [0.1],
-        "seasonality_mode": ["additive"],
+        "changepoint_prior_scale": [0.001, 0.01, 0.1],
+        "seasonality_prior_scale": [0.01, 0.1, 1.0],
+        "holidays_prior_scale": [0.01, 0.1, 1.0],
+        "seasonality_mode": ["additive", "multiplicative"],
         "yearly_seasonality": [True, False],
         "weekly_seasonality": [True, False]
     }
 
-    if st.button("Train Prophet Model"):
-        train_prophet_model(prophet_param_grid, prophet_input_example, prophet_model_path, models_folder)
+    if st.button("🚀 Train Prophet Model", key="train_prophet"):
+        with st.spinner("Training Prophet model..."):
+            train_prophet_model(prophet_param_grid, prophet_input_example, prophet_model_path, models_folder)
 
     # 4️⃣ ARIMA Model Training
     st.subheader("4️⃣ ARIMA Model Training")
-    arima_param_grid = {"p": [1, 2], "d": [0, 1], "q": [0, 1]}
+    arima_param_grid = {"p": [1, 2, 3], "d": [0, 1], "q": [0, 1, 2]}
 
-    if st.button("Train ARIMA Model"):
-        train_arima_model(arima_param_grid, arima_input_example, arima_model_path, models_folder)
+    if st.button("🚀 Train ARIMA Model", key="train_arima"):
+        with st.spinner("Training ARIMA model..."):
+            train_arima_model(arima_param_grid, arima_input_example, arima_model_path, models_folder)
 
     # 5️⃣ LightGBM Model Training
     st.subheader("5️⃣ LightGBM Model Training (RandomizedSearchCV)")
     lgb_param_grid = {
-        'num_leaves': [31],
-        'max_depth': [-1],
-        'learning_rate': [0.005],
-        'n_estimators': [500],
-        'feature_fraction': [0.7],
-        'bagging_fraction': [0.7],
-        'bagging_freq': [1],
-        'lambda_l1': [1],
-        'lambda_l2': [1],
-        'min_data_in_leaf': [80]
+        'num_leaves': [31, 50, 100],
+        'max_depth': [-1, 5, 10],
+        'learning_rate': [0.01, 0.05, 0.1],
+        'n_estimators': [100, 200, 500],
+        'feature_fraction': [0.6, 0.8, 1.0],
+        'bagging_fraction': [0.6, 0.8, 1.0],
+        'bagging_freq': [1, 3, 5],
+        'lambda_l1': [0, 1, 2],
+        'lambda_l2': [0, 1, 2],
+        'min_data_in_leaf': [20, 50, 100]
     }
 
-    if st.button("Train LightGBM Model"):
-        train_lightgbm_model(lgb_param_grid, lgb_model_path, models_folder)
+    if st.button("🚀 Train LightGBM Model", key="train_lightgbm"):
+        with st.spinner("Training LightGBM model..."):
+            train_lightgbm_model(lgb_param_grid, lgb_model_path, models_folder)
 
     # 6️⃣ Model Registry Management
     st.subheader("6️⃣ Model Registry Management")
@@ -261,11 +373,14 @@ def setup_mlflow_training():
                 st.write(f"**Total Best Model Runs:** {len(runs)}")
                 
                 if runs:
-                    st.write("**Registered Best Models (ALL as PYFUNC):**")
+                    st.write("**Registered Best Models:**")
                     for run in runs:
                         model_type = run.data.tags.get("model_type", "unknown")
-                        rmse = run.data.metrics.get("rmse", "N/A")
-                        st.write(f"- {run.info.run_name} ({model_type}) - RMSE: {rmse}")
+                        rmse = run.data.metrics.get("test_rmse", run.data.metrics.get("rmse", "N/A"))
+                        mae = run.data.metrics.get("test_mae", run.data.metrics.get("mae", "N/A"))
+                        st.write(f"- {run.info.run_name} ({model_type}) - RMSE: {rmse}, MAE: {mae}")
+                else:
+                    st.info("No runs found in best_models experiment. Train models first.")
             else:
                 st.info("Best Models experiment not created yet. Train models first.")
         except Exception as e:
@@ -393,7 +508,9 @@ def train_prophet_model(prophet_param_grid, prophet_input_example, prophet_model
         st.success(f"Best Prophet Model registered to MLflow as PYFUNC (RMSE: {best_prophet_rmse:.2f})")
 
         # Show next steps
-        st.info("Model saved locally. Use 'Push All Models to DVC' button to share with team.")
+        st.info("Model saved locally and registered in MLflow. You can now use it in the Forecast Engine.")
+    else:
+        st.error("No valid Prophet model was trained.")
 
 def train_arima_model(arima_param_grid, arima_input_example, arima_model_path, models_folder):
     """Train ARIMA model with grid search"""
@@ -451,7 +568,7 @@ def train_arima_model(arima_param_grid, arima_input_example, arima_model_path, m
                 progress_bar.progress(run_count / total_runs)
 
         except Exception as e:
-            st.error(f"ARIMA Run {run_name} failed: {e}")
+            st.warning(f"ARIMA Run {run_name} failed: {e}")
 
     st.success(f"ARIMA Grid search complete. Best RMSE={best_arima_rmse:.2f}, Best MAE={best_arima_mae:.2f}")
     st.write("Best ARIMA Parameters:", best_arima_params)
@@ -495,7 +612,9 @@ def train_arima_model(arima_param_grid, arima_input_example, arima_model_path, m
         st.success(f"Best ARIMA model registered to MLflow as PYFUNC (RMSE: {best_arima_rmse:.2f})")
 
         # Show next steps
-        st.info("Model saved locally. Use 'Push All Models to DVC' button to share with team.")
+        st.info("Model saved locally and registered in MLflow. You can now use it in the Forecast Engine.")
+    else:
+        st.error("No valid ARIMA model was trained.")
 
 def train_lightgbm_model(lgb_param_grid, lgb_model_path, models_folder):
     """Train LightGBM model with RandomizedSearchCV"""
@@ -527,11 +646,11 @@ def train_lightgbm_model(lgb_param_grid, lgb_model_path, models_folder):
     random_search = RandomizedSearchCV(
         estimator=lgb_reg,
         param_distributions=lgb_param_grid,
-        n_iter=25,
+        n_iter=10,  # Reduced for faster training
         scoring='neg_mean_absolute_error',
         cv=3,
         verbose=0,
-        n_jobs=-1,
+        n_jobs=1,  # Use 1 job for Streamlit Cloud compatibility
         random_state=42
     )
 
@@ -621,62 +740,6 @@ def train_lightgbm_model(lgb_param_grid, lgb_model_path, models_folder):
         st.success(f"Best LightGBM Model registered to MLflow as PYFUNC (RMSE: {test_rmse:.2f})")
 
         # Show next steps
-        st.info("Model saved locally. Use 'Push All Models to DVC' button to share with team.")
-
-
-def recreate_model_registry():
-    """Completely recreate the model registry by re-registering existing runs."""
-    try:
-        client = MlflowClient()
-        
-        # Get all runs from the best_models experiment
-        experiment = client.get_experiment_by_name("best_models")
-        if not experiment:
-            st.error("best_models experiment not found")
-            return
-        
-        runs = client.search_runs(experiment_ids=[experiment.experiment_id])
-        
-        st.info(f"Found {len(runs)} runs in best_models experiment")
-        
-        for run in runs:
-            try:
-                model_type = run.data.tags.get("model_type", "unknown")
-                run_id = run.info.run_id
-                
-                st.info(f"Re-registering {model_type} model from run {run_id}")
-                
-                # Construct artifact path
-                artifact_path = f"mlruns/{experiment.experiment_id}/{run_id}/artifacts"
-                
-                if model_type == "prophet":
-                    model_artifact_path = f"{artifact_path}/prophet_model"
-                    registered_name = "BestForecastModels"
-                elif model_type == "arima":
-                    model_artifact_path = f"{artifact_path}/arima_model"
-                    registered_name = "BestForecastModels"
-                elif model_type == "lightgbm":
-                    model_artifact_path = f"{artifact_path}/lightgbm_model"
-                    registered_name = "BestForecastModels"
-                else:
-                    st.warning(f"Unknown model type: {model_type}")
-                    continue
-                
-                # Check if artifact path exists
-                if not os.path.exists(model_artifact_path):
-                    st.warning(f"Artifact path not found: {model_artifact_path}")
-                    continue
-                
-                # Register the model
-                mlflow.register_model(
-                    model_uri=f"runs:/{run_id}/artifacts/{model_type}_model",
-                    name=registered_name
-                )
-                
-                st.success(f"Successfully re-registered {model_type} model")
-                
-            except Exception as e:
-                st.error(f"Failed to re-register run {run.info.run_id}: {e}")
-                
-    except Exception as e:
-        st.error(f"Error recreating model registry: {e}")
+        st.info("Model saved locally and registered in MLflow. You can now use it in the Forecast Engine.")
+    else:
+        st.error("No valid LightGBM model was trained.")
