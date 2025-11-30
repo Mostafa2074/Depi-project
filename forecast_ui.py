@@ -9,18 +9,24 @@ def run_forecast_app(model, prophet_df, model_type="unknown"):
     
     if model is None:
         st.error("No production model found in MLflow Registry.")
-        st.info("Please train and promote a model to Production stage first.")
+        st.info("""
+        **To use the Forecast Engine:**
+        1. Go to **🔬 MLflow Tracking** tab
+        2. Train a model (LightGBM or ARIMA)
+        3. The model will be automatically registered
+        4. Return here to make predictions
+        """)
         return
     
     # Display model info
     st.sidebar.header("Model Information")
     st.sidebar.info(f"**Model Type:** {model_type}")
-    st.sidebar.info(f"**Source:** MLflow Model Registry (Production)")
+    st.sidebar.info(f"**Source:** MLflow Model Registry")
     
     # Model info section
     with st.expander("ℹ️ Model Details"):
         st.write(f"**Loaded Model Type:** {model_type}")
-        st.write("**Source:** MLflow Model Registry - Production Stage")
+        st.write("**Source:** MLflow Model Registry")
         if not prophet_df.empty:
             data_last_date = prophet_df['ds'].max().date()
             st.write(f"**Current Data Up To:** {data_last_date}")
@@ -36,7 +42,7 @@ def run_forecast_app(model, prophet_df, model_type="unknown"):
     st.markdown("---")
 
     # ========================================================================
-    # MODE 1: BATCH PREDICTIONS (UPDATED WITH DATE INPUT)
+    # MODE 1: BATCH PREDICTIONS
     # ========================================================================
     if prediction_mode == "📦 Batch Predictions":
         st.sidebar.header("Batch Forecast Settings")
@@ -112,11 +118,14 @@ def run_forecast_app(model, prophet_df, model_type="unknown"):
         with col2:
             st.markdown("###")
             if st.button("Predict"):
-                # Pass prophet_df to real_time_predict_mlflow for ARIMA context
-                res = real_time_predict_mlflow(model, model_type, pd.to_datetime(target_date), prophet_df=prophet_df)
-                if 'real_time_predictions' not in st.session_state:
-                    st.session_state.real_time_predictions = []
-                st.session_state.real_time_predictions.insert(0, res)
+                try:
+                    # Pass prophet_df to real_time_predict_mlflow for ARIMA context
+                    res = real_time_predict_mlflow(model, model_type, pd.to_datetime(target_date), prophet_df=prophet_df)
+                    if 'real_time_predictions' not in st.session_state:
+                        st.session_state.real_time_predictions = []
+                    st.session_state.real_time_predictions.insert(0, res)
+                except Exception as e:
+                    st.error(f"Prediction failed: {e}")
         
         if st.session_state.get('real_time_predictions'):
             latest = st.session_state.real_time_predictions[0]
@@ -189,11 +198,10 @@ def display_mlflow_forecast_results(forecast_data, prophet_df, model_type, end_d
             y=prophet_df['y'],
             mode='lines+markers',
             name='Historical Sales',
-            line=dict(color='#1abc9c', width=2),  # Same color as forecast
+            line=dict(color='#1abc9c', width=2),
             marker=dict(color='#1abc9c', size=4),
-            opacity=0.4  # Slight fade to distinguish history
+            opacity=0.4
         ))
-
 
     # Forecast Line
     fig.add_trace(go.Scatter(
