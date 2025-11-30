@@ -20,24 +20,18 @@ def get_mlflow_paths():
     }
 
 def get_model_paths():
-    """Get model related paths - using existing mlflow_project structure"""
+    """Get model related paths"""
     root = get_project_root()
-    mlflow_project_path = os.path.join(root, "mlflow_project")
-    models_folder = os.path.join(mlflow_project_path, "models", "models")
     
-    # Ensure directories exist
-    os.makedirs(models_folder, exist_ok=True)
+    # Create necessary directories
     os.makedirs("mlruns", exist_ok=True)
     
     return {
-        'dataset': os.path.join(root, "model_dataset.csv"),
-        'dataset_dvc': os.path.join(root, "model_dataset.csv.dvc"),
-        'mlflow_project_path': mlflow_project_path,
-        'models_folder': models_folder,
-        'prophet_model': os.path.join(models_folder, "prophet_tuned_model.pkl"),
-        'arima_model': os.path.join(models_folder, "arima_model.pkl"),
-        'lightgbm_model': os.path.join(models_folder, "Light GBM.pkl"),
+        'dataset': os.path.join(root, "model_dataset.csv"),  # Keep for backward compatibility
+        'data_zip': os.path.join(root, "Data.zip"),  # Primary data source
         'actual_dataset': os.path.join(root, "actual_dataset.csv"),
-        'data_zip': os.path.join(root, "Data.zip"),
-        'models_folder_dvc': os.path.join(mlflow_project_path, "models", "models.dvc")
+        'models_folder': os.path.join(root, "models"),
+        'prophet_model': os.path.join(root, "models", "prophet_tuned_model.pkl"),
+        'arima_model': os.path.join(root, "models", "arima_model.pkl"),
+        'lightgbm_model': os.path.join(root, "models", "lightgbm_model.pkl"),
     }
