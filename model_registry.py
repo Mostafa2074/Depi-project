@@ -1,4 +1,4 @@
-# [file name]: model_registry.py - Fix the specific error
+# [file name]: model_registry.py
 import streamlit as st
 import mlflow
 import mlflow.pyfunc
@@ -46,8 +46,6 @@ def load_production_model_from_registry(model_name="BestForecastModels", stage="
         st.error(f"Error loading model from registry: {e}")
         return None
 
-# ... rest of the model_registry.py code remains the same ...
-
 def load_model_robustly(model_uri, client, model_version):
     """Load MLflow model with multiple fallback strategies."""
     strategies = [
@@ -92,8 +90,8 @@ def try_reconstruct_from_run(model_uri, client, model_version):
         st.info(f"Run ID: {run_id}")
         st.info(f"Experiment ID: {run.info.experiment_id}")
         
-        # Try to reconstruct the artifact path
-        artifact_base = "mlruns"
+        # Try to reconstruct the artifact path - use relative paths
+        artifact_base = "./mlruns"
         possible_paths = [
             os.path.join(artifact_base, str(run.info.experiment_id), run_id, "artifacts"),
             os.path.join(artifact_base, str(run.info.experiment_id), run_id, "artifacts", "model"),
@@ -130,6 +128,8 @@ def try_reconstruct_from_run(model_uri, client, model_version):
     except Exception as e:
         st.warning(f"Reconstruction strategy failed: {e}")
         return None
+
+# ... rest of model_registry.py remains the same ...
 
 def get_model_type_from_registry(model_name="BestForecastModels", stage="Production"):
     """Determine the type of model in the registry."""
@@ -237,4 +237,5 @@ def recreate_model_registry():
                 
     except Exception as e:
         st.error(f"Error recreating model registry: {e}")
+
 
