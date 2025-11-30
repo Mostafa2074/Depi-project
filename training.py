@@ -392,107 +392,8 @@ def setup_mlflow_training():
 
 def train_prophet_model(prophet_param_grid, prophet_input_example, prophet_model_path, models_folder):
     """Train Prophet model with grid search"""
-    if 'mlflow_prophet_train_df' not in st.session_state:
-        st.error("Please load dataset first")
-        return
-        
-    st.write("Starting Prophet Grid Search...")
+    # ... existing code ...
     
-    # Setup experiment with proper artifact location
-    experiment_id = setup_mlflow_experiment("prophet_test")
-    
-    best_prophet_rmse = float("inf")
-    best_prophet_mae = float("inf")
-    best_prophet_params = None
-    best_prophet_model = None
-
-    progress_text = st.empty()
-    progress_bar = st.progress(0)
-
-    total_runs = len(prophet_param_grid["changepoint_prior_scale"]) * \
-                 len(prophet_param_grid["seasonality_prior_scale"]) * \
-                 len(prophet_param_grid["holidays_prior_scale"]) * \
-                 len(prophet_param_grid["seasonality_mode"]) * \
-                 len(prophet_param_grid["yearly_seasonality"]) * \
-                 len(prophet_param_grid["weekly_seasonality"])
-    run_count = 0
-
-    for cps, sps, hps, mode, yearly, weekly in product(
-        prophet_param_grid["changepoint_prior_scale"],
-        prophet_param_grid["seasonality_prior_scale"],
-        prophet_param_grid["holidays_prior_scale"],
-        prophet_param_grid["seasonality_mode"],
-        prophet_param_grid["yearly_seasonality"],
-        prophet_param_grid["weekly_seasonality"]
-    ):
-        run_name = f"Prophet_cps{cps}_sps{sps}_hps{hps}_mode{mode}"
-        params = {
-            "changepoint_prior_scale": cps,
-            "seasonality_prior_scale": sps,
-            "holidays_prior_scale": hps,
-            "seasonality_mode": mode,
-            "yearly_seasonality": yearly,
-            "weekly_seasonality": weekly,
-            "daily_seasonality": False
-        }
-
-        try:
-            # Use try-except for MLflow operations
-            with mlflow.start_run(run_name=run_name, experiment_id=experiment_id):
-                mlflow.log_params(params)
-
-                model = Prophet(**params)
-                model.fit(st.session_state.mlflow_prophet_train_df)
-
-                # Forecast and calculate metrics
-                forecast_test = model.predict(st.session_state.mlflow_prophet_test_df)
-                y_test_pred = forecast_test["yhat"]
-                test_rmse = mean_squared_error(st.session_state.mlflow_prophet_test_df["y"], y_test_pred) ** 0.5
-                test_mae = mean_absolute_error(st.session_state.mlflow_prophet_test_df["y"], y_test_pred)
-
-                # Log metrics
-                mlflow.log_metric("test_rmse", test_rmse)
-                mlflow.log_metric("test_mae", test_mae)
-
-                if test_rmse < best_prophet_rmse:
-                    best_prophet_rmse = test_rmse
-                    best_prophet_mae = test_mae
-                    best_prophet_params = params
-                    best_prophet_model = model
-
-                run_count += 1
-                progress_text.text(f"Prophet Run {run_count}/{total_runs} — MAE={test_mae:.2f}, RMSE={test_rmse:.2f}")
-                progress_bar.progress(run_count / total_runs)
-
-        except Exception as e:
-            st.warning(f"Prophet Run {run_name} MLflow logging failed: {e}")
-            # Continue with training even if MLflow fails
-            try:
-                model = Prophet(**params)
-                model.fit(st.session_state.mlflow_prophet_train_df)
-                forecast_test = model.predict(st.session_state.mlflow_prophet_test_df)
-                y_test_pred = forecast_test["yhat"]
-                test_rmse = mean_squared_error(st.session_state.mlflow_prophet_test_df["y"], y_test_pred) ** 0.5
-                test_mae = mean_absolute_error(st.session_state.mlflow_prophet_test_df["y"], y_test_pred)
-
-                if test_rmse < best_prophet_rmse:
-                    best_prophet_rmse = test_rmse
-                    best_prophet_mae = test_mae
-                    best_prophet_params = params
-                    best_prophet_model = model
-
-                run_count += 1
-                progress_text.text(f"Prophet Run {run_count}/{total_runs} — MAE={test_mae:.2f}, RMSE={test_rmse:.2f}")
-                progress_bar.progress(run_count / total_runs)
-                
-            except Exception as inner_e:
-                st.error(f"Prophet Run {run_name} training failed: {inner_e}")
-
-    # Rest of the function remains the same...
-
-    st.success(f"Prophet Grid search complete. Best RMSE={best_prophet_rmse:.2f}, Best MAE={best_prophet_mae:.2f}")
-    st.write("Best Prophet Parameters:", best_prophet_params)
-
     # Save and register best Prophet model
     if best_prophet_model is not None:
         # Ensure models folder exists
@@ -518,20 +419,22 @@ def train_prophet_model(prophet_param_grid, prophet_input_example, prophet_model
             prediction_output = best_prophet_model.predict(prophet_input_example)[['yhat']]
             signature = infer_signature(prophet_input_example, prediction_output)
 
+            # IMPORTANT: This line registers the model
             mlflow.pyfunc.log_model(
                 python_model=wrapper_model,
                 artifact_path="prophet_model",
-                registered_model_name=PROPHET_REGISTRY_NAME,
+                registered_model_name=PROPHET_REGISTRY_NAME,  # This should be "BestForecastModels"
                 input_example=prophet_input_example,
                 signature=signature
             )
 
         st.success(f"Best Prophet Model registered to MLflow as PYFUNC (RMSE: {best_prophet_rmse:.2f})")
-
-        # Show next steps
-        st.info("Model saved locally and registered in MLflow. You can now use it in the Forecast Engine.")
-    else:
-        st.error("No valid Prophet model was trained.")
+        
+        # Clear cache to ensure the main app sees the new model
+        from model_registry import load_production_model_from_registry
+        load_production_model_from_registry.clear()
+        
+        st.info("🔄 Model registered successfully! You can now use it in the Forecast Engine.")
 
 def train_arima_model(arima_param_grid, arima_input_example, arima_model_path, models_folder):
     """Train ARIMA model with grid search"""
@@ -764,6 +667,7 @@ def train_lightgbm_model(lgb_param_grid, lgb_model_path, models_folder):
         st.info("Model saved locally and registered in MLflow. You can now use it in the Forecast Engine.")
     else:
         st.error("No valid LightGBM model was trained.")
+
 
 
 
