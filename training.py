@@ -154,23 +154,23 @@ def setup_mlflow_training():
             file_list = zip_ref.namelist()
             st.info(f"Files in Data.zip: {', '.join(file_list)}")
             
-            # Look for train.csv
-            train_file = None
+            # Look for Data.csv (changed from train.csv)
+            data_file = None
             for file in file_list:
-                if 'train' in file.lower() and file.endswith('.csv'):
-                    train_file = file
+                if file.lower() == 'data.csv' or file.lower().endswith('/data.csv'):
+                    data_file = file
                     break
             
-            if not train_file:
-                st.error("❌ No train.csv found in Data.zip")
-                st.info("Please ensure your Data.zip contains a train.csv file")
+            if not data_file:
+                st.error("❌ No Data.csv found in Data.zip")
+                st.info("Please ensure your Data.zip contains a Data.csv file")
                 return
                 
-            # Extract and read the train file
-            with zip_ref.open(train_file) as f:
+            # Extract and read the Data.csv file
+            with zip_ref.open(data_file) as f:
                 df = pd.read_csv(f)
             
-            st.success(f"✅ Successfully loaded data from {train_file} in Data.zip")
+            st.success(f"✅ Successfully loaded data from {data_file} in Data.zip")
             
             # Try to parse date column if it exists
             if 'date' in df.columns:
@@ -192,7 +192,10 @@ def setup_mlflow_training():
     with col2:
         st.metric("Columns", len(df.columns))
     with col3:
-        st.metric("Date Range", f"{df['date'].min().date()} to {df['date'].max().date()}")
+        if 'date' in df.columns:
+            st.metric("Date Range", f"{df['date'].min().date()} to {df['date'].max().date()}")
+        else:
+            st.metric("Date Column", "Not Found")
     
     # Check required columns
     if 'sales' not in df.columns:
