@@ -43,20 +43,6 @@ class ARIMAModelWrapper(mlflow.pyfunc.PythonModel):
             print(traceback.format_exc())
             return pd.DataFrame({'prediction': [0] * len(model_input)})
 
-class ProphetModelWrapper(mlflow.pyfunc.PythonModel):
-    def __init__(self, model):
-        self.model = model
-        
-    def predict(self, context, model_input):
-        """
-        Generates forecast using the Prophet model.
-        """
-        # Call the actual Prophet model predict method
-        full_forecast = self.model.predict(model_input)
-        
-        # Return both 'ds' and 'yhat' columns
-        return full_forecast[['ds', 'yhat']]
-
 class LightGBMModelWrapper(mlflow.pyfunc.PythonModel):
     def __init__(self, model, feature_columns=None):
         self.model = model
@@ -96,3 +82,5 @@ class LightGBMModelWrapper(mlflow.pyfunc.PythonModel):
             print(f"LightGBM prediction error: {e}")
             print(traceback.format_exc())
             return pd.DataFrame({'prediction': [0] * len(model_input)})
+
+# Prophet wrapper removed since Prophet is not available
