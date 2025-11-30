@@ -44,34 +44,49 @@ def run_monitoring_app():
         with st.expander("📧 Email Alert Configuration", expanded=False):
             st.info("Configure email alerts for high prediction errors")
             
-            email_enabled = st.checkbox("Enable Email Alerts", value=True)
+            email_enabled = st.checkbox("Enable Email Alerts", value=False)  # Default to False for cloud
             recipient_email = st.text_input(
                 "Recipient Email", 
-                value="mostafanad2004@gmail.com",
+                value=st.secrets.get("EMAIL", {}).get("RECIPIENT", "") if st.secrets.get("EMAIL") else "",
                 help="Email address to receive high error alerts"
             )
             
-            if st.button("Test Email Connection"):
+            if st.button("Test Email Connection") and recipient_email:
                 test_email_connection(recipient_email)
     else:
         email_enabled = False
-        recipient_email = "mostafanad2004@gmail.com"
+        recipient_email = ""
         st.warning("Email alert system not available. Please ensure email_alert.py and email_content.py are in the same directory.")
     
     # Load actual dataset first
     try:
         paths = get_model_paths()
         actual_dataset_path = paths['actual_dataset']
-        actual_df = pd.read_csv(actual_dataset_path)
-        actual_df['date'] = pd.to_datetime(actual_df['date'])
-        actual_df = actual_df.rename(columns={'sales': 'actual_sales'})
-        st.success(f"✅ Loaded actual dataset from {actual_dataset_path}")
+        
+        # Use Streamlit's file uploader as fallback for cloud deployment
+        if not os.path.exists(actual_dataset_path):
+            st.info("Upload actual dataset CSV file for monitoring:")
+            uploaded_file = st.file_uploader("Upload actual_dataset.csv", type="csv")
+            if uploaded_file is not None:
+                actual_df = pd.read_csv(uploaded_file)
+                actual_df['date'] = pd.to_datetime(actual_df['date'])
+                actual_df = actual_df.rename(columns={'sales': 'actual_sales'})
+                st.success("✅ Loaded actual dataset from uploaded file")
+            else:
+                st.error("Please upload actual_dataset.csv file")
+                return
+        else:
+            actual_df = pd.read_csv(actual_dataset_path)
+            actual_df['date'] = pd.to_datetime(actual_df['date'])
+            actual_df = actual_df.rename(columns={'sales': 'actual_sales'})
+            st.success(f"✅ Loaded actual dataset from {actual_dataset_path}")
         
         # Show actual data date range
-        st.info(f"📅 Actual data range: {actual_df['date'].min().date()} to {actual_df['date'].max().date()}")
+        if not actual_df.empty:
+            st.info(f"📅 Actual data range: {actual_df['date'].min().date()} to {actual_df['date'].max().date()}")
     except Exception as e:
         st.error(f"❌ Could not load actual dataset: {e}")
-        st.info("Please ensure 'actual_dataset.csv' exists in your directory")
+        st.info("Please ensure 'actual_dataset.csv' exists in your directory or upload it")
         return
     
     # Try to get prediction data directly from MLflow
@@ -122,6 +137,11 @@ def run_monitoring_app():
 def test_email_connection(recipient_email):
     """Test email connection and send a test message"""
     try:
+        # Check if email credentials are available in secrets
+        if not st.secrets.get("EMAIL"):
+            st.error("Email configuration not found in secrets. Please configure EMAIL section in .streamlit/secrets.toml")
+            return
+            
         email_alert = EmailAlert.get_instance()
         
         # Create test email content
@@ -148,7 +168,7 @@ def test_email_connection(recipient_email):
         
     except Exception as e:
         st.error(f"❌ Failed to send test email: {e}")
-        st.info("Please check your .env file with SENDER_EMAIL and SENDER_PASSWORD")
+        st.info("Please check your .streamlit/secrets.toml file with SENDER_EMAIL and SENDER_PASSWORD")
 
 def send_high_error_alert(recipient_email, error_data, comparison_stats):
     """Send email alert for high prediction error"""
@@ -468,7 +488,7 @@ def show_demo_comparison(actual_df):
     comparison_df['percentage_error'] = (comparison_df['absolute_error'] / comparison_df['actual_sales']) * 100
     comparison_df['error'] = comparison_df['predicted'] - comparison_df['actual_sales']
     
-    display_comparison_analysis(comparison_df, demo_pred_df, False, "mostafanad2004@gmail.com")
+    display_comparison_analysis(comparison_df, demo_pred_df, False, "")
     
     st.info("💡 This is a demonstration using simulated predictions. To see real model performance, generate predictions using the Forecast Engine.")
 
@@ -549,7 +569,7 @@ def merge_predictions_with_actuals(pred_df, actual_df):
         st.error(f"Error merging data: {e}")
         return pd.DataFrame()
 
-def display_comparison_analysis(comparison_df, pred_df, email_enabled=False, recipient_email="mostafanad2004@gmail.com"):
+def display_comparison_analysis(comparison_df, pred_df, email_enabled=False, recipient_email=""):
     """Display the main comparison charts with smooth point-by-point animation"""
     
     st.subheader("📊 Prediction vs Actual Comparison - Live Monitoring")
@@ -594,7 +614,7 @@ def display_comparison_analysis(comparison_df, pred_df, email_enabled=False, rec
             first_high_error = row.copy()
             
             # Send email alert if enabled
-            if email_enabled and not email_sent:
+            if email_enabled and not email_sent and recipient_email:
                 with status_placeholder.container():
                     st.warning("🚨 Sending email alert...")
                 
