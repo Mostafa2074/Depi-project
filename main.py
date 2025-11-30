@@ -124,9 +124,9 @@ def main():
     
     # Add data source info to sidebar
     st.sidebar.markdown("---")
-    st.sidebar.info("**Data Sources:**\n"
-                   "- Dashboard: Data.csv from Data.zip\n"
-                   "- Training: model_dataset.csv")
+    # st.sidebar.info("**Data Sources:**\n"
+                   # "- Dashboard: Data.csv from Data.zip\n"
+                   # "- Training: model_dataset.csv")
     
     # Add MLflow utilities to sidebar for MLflow Tracking page
     if "MLflow Tracking" in app_mode:
@@ -153,4 +153,5 @@ def main():
 
 if __name__ == '__main__':
     main()
+
 
