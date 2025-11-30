@@ -4,9 +4,10 @@ import mlflow.pyfunc
 import pandas as pd
 import numpy as np
 from mlflow.tracking import MlflowClient
+from prophet import Prophet
 from statsmodels.tsa.arima.model import ARIMA
 import lightgbm as lgb
-from model_wrappers import ARIMAModelWrapper, LightGBMModelWrapper
+from model_wrappers import ProphetModelWrapper, ARIMAModelWrapper, LightGBMModelWrapper
 from prediction_logger import PredictionLogger
 import os
 
@@ -20,7 +21,6 @@ def setup_mlflow_training():
     - Models are saved only for this browser session
     - Perfect for testing and demonstrations
     - Automatically cleared when you leave
-    - After training, models are automatically registered for use in Forecast Engine
     """)
     
     # Initialize MLflow client
@@ -32,10 +32,10 @@ def setup_mlflow_training():
     
     st.sidebar.header("Training Configuration")
     
-    # Model selection - Only LightGBM and ARIMA
+    # Model selection
     model_choice = st.sidebar.selectbox(
         "Select Model to Train",
-        ["LightGBM", "ARIMA"]
+        ["Prophet", "ARIMA", "LightGBM"]
     )
     
     # Data loading
@@ -50,51 +50,85 @@ def setup_mlflow_training():
     st.sidebar.write(f"Data range: {prophet_df['ds'].min().date()} to {prophet_df['ds'].max().date()}")
     st.sidebar.write(f"Total records: {len(prophet_df)}")
     
-    # Show model descriptions
-    with st.expander("📋 Model Descriptions"):
-        st.write("""
-        **LightGBM**: 
-        - Gradient boosting framework
-        - Fast training and high accuracy
-        - Handles large datasets efficiently
-        - Recommended for most use cases
-        
-        **ARIMA**:
-        - Classical time series model
-        - Good for data with clear trends/seasonality
-        - Interpretable parameters
-        """)
-    
     # Session management
     add_session_cleanup()
     
-    if st.sidebar.button("🚀 Train Selected Model", type="primary"):
+    if st.sidebar.button("🚀 Train Selected Model"):
         with st.spinner(f"Training {model_choice} model..."):
             try:
-                if model_choice == "ARIMA":
+                if model_choice == "Prophet":
+                    train_prophet(prophet_df, client)
+                elif model_choice == "ARIMA":
                     train_arima(prophet_df, client)
                 elif model_choice == "LightGBM":
                     train_lightgbm(prophet_df, client)
                 
                 st.success(f"✅ {model_choice} training completed!")
-                st.success("🎯 Model automatically registered for use in Forecast Engine!")
                 st.balloons()
                 
             except Exception as e:
                 st.error(f"❌ Training failed: {e}")
 
-# ... (keep the rest of training.py functions the same as before)
-
 def train_prophet(prophet_df, client):
-    """Prophet training disabled due to dependency issues"""
-    st.error("🚫 Prophet training is temporarily unavailable")
-    st.info("""
-    **Why Prophet is disabled:**
-    - Prophet dependencies are incompatible with Streamlit Cloud's Python 3.13
-    - Use LightGBM or ARIMA models instead
-    - LightGBM provides excellent performance for time series forecasting
-    """)
-    return
+    """Train and log Prophet model"""
+    with mlflow.start_run(run_name="prophet_model"):
+        try:
+            # Train model
+            model = Prophet(
+                yearly_seasonality=True,
+                weekly_seasonality=True,
+                daily_seasonality=False,
+                seasonality_mode='multiplicative'
+            )
+            model.fit(prophet_df)
+            
+            # Log parameters
+            mlflow.log_params({
+                "model_type": "prophet",
+                "yearly_seasonality": True,
+                "weekly_seasonality": True,
+                "daily_seasonality": False,
+                "seasonality_mode": "multiplicative"
+            })
+            
+            # Make validation forecast
+            future = model.make_future_dataframe(periods=30)
+            forecast = model.predict(future)
+            
+            # Calculate metrics
+            last_30_days = prophet_df.tail(30)
+            validation_forecast = forecast[forecast['ds'].isin(last_30_days['ds'])]
+            merged = pd.merge(last_30_days, validation_forecast, on='ds')
+            
+            if not merged.empty:
+                mae = np.mean(np.abs(merged['y'] - merged['yhat']))
+                rmse = np.sqrt(np.mean((merged['y'] - merged['yhat'])**2))
+                
+                mlflow.log_metrics({
+                    "validation_mae": mae,
+                    "validation_rmse": rmse
+                })
+            
+            # Log model
+            wrapped_model = ProphetModelWrapper(model)
+            mlflow.pyfunc.log_model(
+                "prophet_model",
+                python_model=wrapped_model,
+                registered_model_name="BestForecastModels"
+            )
+            
+            # Set tags
+            mlflow.set_tags({
+                "model_type": "prophet",
+                "framework": "prophet",
+                "task": "time_series_forecasting"
+            })
+            
+            st.success("✅ Prophet model trained and registered successfully!")
+            
+        except Exception as e:
+            st.error(f"❌ Prophet training failed: {e}")
+            raise
 
 def train_arima(prophet_df, client):
     """Train and log ARIMA model"""
@@ -256,4 +290,3 @@ def reset_mlflow_completely():
     except Exception as e:
         st.error(f"Error resetting MLflow: {e}")
         return False
-
